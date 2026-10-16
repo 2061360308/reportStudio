@@ -18,24 +18,27 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+report-core = { path = "crates/report-core" }
 tauri = { version = "2", features = ["protocol-asset", "unstable"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-minijinja = { version = "2", features = ["loader"] }
 zip = "2"
-sha2 = "0.10"
-hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 chrono = "0.4"
 url = "2"
 percent-encoding = "2"
 mime_guess = "2"
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
 windows-core = "0.62"
+
+[workspace]
+members = [".", "crates/report-core", "crates/report-dev"]
+default-members = ["."]
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

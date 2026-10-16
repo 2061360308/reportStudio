@@ -3,7 +3,6 @@ use chrono::Datelike;
 use minijinja::{Environment, Value as MjValue};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -374,38 +373,6 @@ pub fn resolve_values(
     Ok(ctx)
 }
 
-/// 将模板渲染进 out_dir，返回渲染后的入口 HTML 路径。
-pub fn render_to_dir(
-    template_dir: &Path,
-    manifest: &TemplateManifest,
-    values: &Map<String, Value>,
-    out_dir: &Path,
-) -> Result<PathBuf, String> {
-    crate::templates::copy_dir(template_dir, out_dir)?;
-
-    let resolved = resolve_values(manifest, values)?;
-    let env = make_env(Some(template_dir.to_path_buf()), None);
-    let tmpl = env
-        .get_template(&manifest.entry)
-        .map_err(|e| format!("加载入口模板失败: {e}"))?;
-    let html = tmpl
-        .render(&base_ctx(manifest, &resolved))
-        .map_err(|e| format!("渲染失败: {e}"))?;
-
-    let entry_path = out_dir.join(&manifest.entry);
-    if let Some(parent) = entry_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&entry_path, html).map_err(|e| e.to_string())?;
-    Ok(entry_path)
-}
-
-pub fn new_render_dir(base: &Path) -> Result<PathBuf, String> {
-    let dir = base.join(format!("render-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir)
-}
-
 /// A4（或指定纸张）在某方向下的宽高（mm）。
 fn page_dims(size: &str, orientation: &str) -> (String, String) {
     let landscape = orientation.eq_ignore_ascii_case("landscape");
@@ -454,16 +421,56 @@ fn page_geometry(page: &PageDef, named: Option<i64>) -> String {
     }
 }
 
-/// 把单页片段包成一个完整 HTML 文档（供预览 iframe 加载）。
-fn wrap_page(content: &str, page: &PageDef) -> String {
+/// 流式页样式：解除固定页高/裁切，让排版引擎在超出页框时自动续页；
+/// 表格行禁止跨页断开；屏幕下叠加每页高度的分页参考线（打印时不输出）。
+const FLOW_CSS: &str = r#"
+.paper[data-flow]{height:auto;}
+[data-flow] .page{height:auto;overflow:visible;}
+[data-flow] table.doc-tbl tr,
+[data-flow] table.doc-tbl thead{break-inside:avoid;page-break-inside:avoid;}
+@media screen{
+  .paper[data-flow]{position:relative;}
+  .paper[data-flow]::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:5;
+    background-image:repeating-linear-gradient(to bottom,
+      transparent 0,transparent calc(var(--a4h) - 1px),
+      rgba(10,114,239,.35) calc(var(--a4h) - 1px),rgba(10,114,239,.35) var(--a4h));}
+}
+"#;
+
+/// 给片段的根 `.paper` 打上流式标记。
+fn with_flow_attr(content: &str) -> String {
+    content.replacen("class=\"paper\"", "class=\"paper\" data-flow", 1)
+}
+
+/// 把单页片段补全成完整 HTML 文档字符串（供前端 srcdoc 注入）。
+/// `base_href` 为绝对基准（如 `http://report.localhost/m/<id>/pages/`），
+/// 使片段内 `../assets/…` 等相对引用可解析到挂载路由。
+fn wrap_page(
+    content: &str,
+    page: &PageDef,
+    base_href: &str,
+    assets_path: &str,
+    thumb: bool,
+) -> String {
     // 若模板本身是完整文档则原样返回（向后兼容旧模板）。
     if content.to_ascii_lowercase().contains("<html") {
         return content.to_string();
     }
     let script = PREVIEW_JS.replace("__RS_PAGE__", &page.file);
+    let thumb_flag = if thumb {
+        "<script>window.__RS_THUMB=1;</script>"
+    } else {
+        ""
+    };
+    let (content, flow_css) = if page.is_flow() {
+        (with_flow_attr(content), FLOW_CSS)
+    } else {
+        (content.to_string(), "")
+    };
     format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n<link rel=\"stylesheet\" href=\"../assets/base.css\">\n<style>\n{}\n</style></head><body>\n{}\n<script>\n{}\n</script>\n</body></html>\n",
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n<base href=\"{base_href}\">\n<link rel=\"stylesheet\" href=\"../{assets_path}/base.css\">\n<style>\n{}{}\n</style></head><body>\n{}\n{thumb_flag}<script>\n{}\n</script>\n</body></html>\n",
         page_geometry(page, None),
+        flow_css,
         content,
         script
     )
@@ -471,7 +478,7 @@ fn wrap_page(content: &str, page: &PageDef) -> String {
 
 /// 预览页注入脚本：收集 `.rs-field` 标记（含页面内矩形）并上报父窗口；响应定位/悬停高亮。
 const PREVIEW_JS: &str = r#"(function () {
-  if (location.search.indexOf("thumb") >= 0) return;
+  if (window.__RS_THUMB) return;
   var PAGE = "__RS_PAGE__";
   document.documentElement.classList.add("rs-annot");
   var hoverEl = null;
@@ -534,20 +541,28 @@ const PREVIEW_JS: &str = r#"(function () {
       for (var i = 0; i < hs.length; i++) hs[i].classList.remove("rs-hit");
     }
   });
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", collect);
-  else collect();
+  function isFlow() { return !!document.querySelector("[data-flow]"); }
+  function reportSize() {
+    if (!isFlow()) return;
+    var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, document.body.offsetHeight);
+    if (parent !== window) parent.postMessage({ type: "rs-flow-size", page: PAGE, height: h }, "*");
+  }
+  function settle() { collect(); reportSize(); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", settle);
+  else settle();
+  window.addEventListener("load", settle);
+  if (document.fonts && document.fonts.ready) { try { document.fonts.ready.then(settle); } catch (e) {} }
+  try { new ResizeObserver(function () { reportSize(); }).observe(document.body); } catch (e) {}
 })();"#;
 
-/// 逐页渲染成独立的预览文档并写入 out_dir（页面文件原样路径）。
-pub fn render_preview_pages(
+/// 逐页渲染成完整文档字符串（不落盘、不拷贝模板）：返回 (file, html, thumb_html)。
+pub fn render_preview_html(
     template_dir: &Path,
     manifest: &TemplateManifest,
     values: &Map<String, Value>,
-    out_dir: &Path,
     pages: &[PageDef],
-) -> Result<(), String> {
-    crate::templates::copy_dir(template_dir, out_dir)?;
-
+    base_href: &str,
+) -> Result<Vec<(String, String, String)>, String> {
     // 空值用 sample 占位填充（仅预览），并记录哪些键用了占位。
     let mut filled = values.clone();
     let mut sample_keys: HashSet<String> = HashSet::new();
@@ -558,6 +573,7 @@ pub fn render_preview_pages(
         let empty = match filled.get(&v.key) {
             None | Some(Value::Null) => true,
             Some(Value::String(s)) => s.is_empty(),
+            Some(Value::Array(a)) => a.is_empty(),
             _ => false,
         };
         if empty {
@@ -574,7 +590,9 @@ pub fn render_preview_pages(
         Some(Arc::new(sample_keys)),
     );
     let context = base_ctx(manifest, &resolved);
+    let assets_path = manifest.assets_path();
 
+    let mut out = Vec::with_capacity(pages.len());
     for page in pages {
         let tmpl = env
             .get_template(&page.file)
@@ -582,31 +600,28 @@ pub fn render_preview_pages(
         let raw = tmpl
             .render(&context)
             .map_err(|e| format!("渲染页面 {} 失败: {e}", page.file))?;
-        let doc = wrap_page(&raw, page);
-        let path = out_dir.join(&page.file);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        fs::write(&path, doc).map_err(|e| e.to_string())?;
+        let html = wrap_page(&raw, page, base_href, &assets_path, false);
+        let thumb_html = wrap_page(&raw, page, base_href, &assets_path, true);
+        out.push((page.file.clone(), html, thumb_html));
     }
-    Ok(())
+    Ok(out)
 }
 
-/// 由所有页面组装成一份可打印的合并文档（命名 @page 支持横竖混排），返回入口路径。
-pub fn render_print_document(
+/// 由所有页面组装成一份合并文档字符串（命名 @page 支持横竖混排）。
+pub fn render_print_html(
     template_dir: &Path,
     manifest: &TemplateManifest,
     values: &Map<String, Value>,
-    out_dir: &Path,
-) -> Result<PathBuf, String> {
-    crate::templates::copy_dir(template_dir, out_dir)?;
-
+) -> Result<String, String> {
     let resolved = resolve_values(manifest, values)?;
     let env = make_env(Some(template_dir.to_path_buf()), None);
     let context = base_ctx(manifest, &resolved);
+    let assets_path = manifest.assets_path();
+    let pages_path = manifest.pages_path();
 
     let mut body = String::new();
     let mut geometry = String::new();
+    let mut has_flow = false;
     for (i, page) in manifest.pages.iter().enumerate() {
         let n = i as i64 + 1;
         let tmpl = env
@@ -616,23 +631,209 @@ pub fn render_print_document(
             .render(&context)
             .map_err(|e| format!("渲染页面 {} 失败: {e}", page.file))?;
         // 给该页的 .paper 打上命名页标记，供 [data-page] 选择器命中
-        let frag = raw.replacen(
+        let mut frag = raw.replacen(
             "class=\"paper\"",
             &format!("class=\"paper\" data-page=\"pg{n}\""),
             1,
         );
+        if page.is_flow() {
+            frag = frag.replacen("class=\"paper\"", "class=\"paper\" data-flow", 1);
+            has_flow = true;
+        }
         body.push_str(&frag);
         body.push('\n');
         geometry.push_str(&page_geometry(page, Some(n)));
         geometry.push('\n');
     }
+    let flow_css = if has_flow { FLOW_CSS } else { "" };
 
-    // 页面片段里的相对路径是相对 `pages/` 写的（图片为 ../media/…），
-    // 打印合并文档在根目录，用 <base> 统一基准。
-    let doc = format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n<base href=\"pages/\">\n<link rel=\"stylesheet\" href=\"../assets/base.css\">\n<style>\n{geometry}\n</style></head><body>\n{body}</body></html>\n"
-    );
-    let path = out_dir.join("print.html");
-    fs::write(&path, doc).map_err(|e| e.to_string())?;
-    Ok(path)
+    // 页面片段里的相对路径是相对页面目录写的，合并文档经 <base> 统一基准。
+    Ok(format!(
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n<base href=\"{pages_path}/\">\n<link rel=\"stylesheet\" href=\"../{assets_path}/base.css\">\n<style>\n{geometry}{flow_css}\n</style></head><body>\n{body}</body></html>\n"
+    ))
 }
+
+/// 把 image/images 变量值改写为绝对挂载 URL，供模板直接用于 `src`。
+/// 值以路由前缀区分来源：`assets/…`=模板资源、`resources/…`=工程资源；
+/// 统一改写为 `mount_root + 值`（挂载根形如 `http://report.localhost/m/<id>/`）。
+/// 空值、已是绝对 URL 或 data URI 的值保持不变。
+pub fn rewrite_resource_urls(
+    manifest: &TemplateManifest,
+    values: &Map<String, Value>,
+    mount_root: &str,
+) -> Map<String, Value> {
+    let is_abs = |s: &str| s.starts_with("http://") || s.starts_with("https://") || s.starts_with("data:");
+    let mut out = values.clone();
+    for v in &manifest.variables {
+        if v.ty != "image" && v.ty != "images" {
+            continue;
+        }
+        match out.get(&v.key) {
+            Some(Value::Array(arr)) => {
+                let na: Vec<Value> = arr
+                    .iter()
+                    .map(|x| match x {
+                        Value::String(s) if !s.is_empty() && !is_abs(s) => {
+                            Value::String(format!("{mount_root}{s}"))
+                        }
+                        other => other.clone(),
+                    })
+                    .collect();
+                out.insert(v.key.clone(), Value::Array(na));
+            }
+            Some(Value::String(s)) if !s.is_empty() && !is_abs(s) => {
+                out.insert(v.key.clone(), Value::String(format!("{mount_root}{s}")));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{PageDef, TemplateManifest};
+
+    fn manifest_with(page_mode: Option<&str>) -> TemplateManifest {
+        TemplateManifest {
+            schema_version: 1,
+            id: "t".into(),
+            version: "1".into(),
+            content_hash: String::new(),
+            name: "t".into(),
+            assets_path: None,
+            pages_path: None,
+            variables: vec![],
+            pages: vec![PageDef {
+                file: "pages/f1.html".into(),
+                mode: page_mode.map(|s| s.to_string()),
+                ..Default::default()
+            }],
+            toc: vec![],
+            hooks: Default::default(),
+        }
+    }
+
+    #[test]
+    fn is_flow_flag() {
+        assert!(!PageDef::default().is_flow());
+        assert!(PageDef {
+            mode: Some("flow".into()),
+            ..Default::default()
+        }
+        .is_flow());
+        assert!(!PageDef {
+            mode: Some("fixed".into()),
+            ..Default::default()
+        }
+        .is_flow());
+    }
+
+    #[test]
+    fn flow_print_doc_marks_and_unfixes() {
+        let dir = std::env::temp_dir().join(format!("rs-flow-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("pages")).unwrap();
+        std::fs::write(
+            dir.join("pages/f1.html"),
+            "<div class=\"paper\"><div class=\"page\">x</div></div>",
+        )
+        .unwrap();
+
+        let flow = render_print_html(&dir, &manifest_with(Some("flow")), &Map::new()).unwrap();
+        assert!(flow.contains("data-flow"));
+        assert!(flow.contains("repeating-linear-gradient"));
+        assert!(flow.contains("data-page=\"pg1\""));
+
+        let fixed = render_print_html(&dir, &manifest_with(None), &Map::new()).unwrap();
+        assert!(!fixed.contains("data-flow"));
+        assert!(!fixed.contains("repeating-linear-gradient"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewrite_resource_urls_prefixes_names() {
+        let m: TemplateManifest = serde_json::from_str(
+            r#"{
+              "schemaVersion": 1, "id": "t", "version": "1", "name": "t",
+              "variables": [
+                { "key": "logo", "type": "image" },
+                { "key": "photos", "type": "images" },
+                { "key": "title", "type": "string" }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let mut values = Map::new();
+        values.insert("logo".into(), Value::from("assets/logo.png"));
+        values.insert(
+            "photos".into(),
+            Value::Array(vec![Value::from("resources/11aa22bb.jpg"), Value::from("")]),
+        );
+        values.insert("title".into(), Value::from("hello"));
+
+        let out = rewrite_resource_urls(&m, &values, "http://x/m/id/");
+        assert_eq!(
+            out.get("logo").unwrap(),
+            &Value::from("http://x/m/id/assets/logo.png")
+        );
+        assert_eq!(
+            out.get("photos").unwrap(),
+            &Value::Array(vec![
+                Value::from("http://x/m/id/resources/11aa22bb.jpg"),
+                Value::from("")
+            ])
+        );
+        // 非图片变量不受影响
+        assert_eq!(out.get("title").unwrap(), &Value::from("hello"));
+    }
+
+    #[test]
+    fn assets_and_pages_path_override() {
+        let mut m = manifest_with(None);
+        m.assets_path = Some("static".into());
+        m.pages_path = Some("docs".into());
+        let dir = std::env::temp_dir().join(format!("rs-paths-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::write(
+            dir.join("docs/f1.html"),
+            "<div class=\"paper\"><div class=\"page\">x</div></div>",
+        )
+        .unwrap();
+        m.pages[0].file = "docs/f1.html".into();
+
+        let html = render_print_html(&dir, &m, &Map::new()).unwrap();
+        assert!(html.contains("<base href=\"docs/\">"));
+        assert!(html.contains("../static/base.css"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flow_preview_doc_reports_size() {
+        let dir = std::env::temp_dir().join(format!("rs-flow-prev-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("pages")).unwrap();
+        std::fs::write(
+            dir.join("pages/f1.html"),
+            "<div class=\"paper\"><div class=\"page\">x</div></div>",
+        )
+        .unwrap();
+
+        let base = "http://report.localhost/m/t/pages/";
+        let m = manifest_with(Some("flow"));
+        let pages = render_preview_html(&dir, &m, &Map::new(), &m.pages, base).unwrap();
+        assert_eq!(pages.len(), 1);
+        let (file, html, thumb) = &pages[0];
+        assert_eq!(file, "pages/f1.html");
+        assert!(html.contains("data-flow"));
+        assert!(html.contains("repeating-linear-gradient"));
+        assert!(html.contains(&format!("<base href=\"{base}\">")));
+        assert!(html.contains("rs-flow-size"));
+        assert!(thumb.contains("window.__RS_THUMB=1"));
+        assert!(!html.contains("window.__RS_THUMB=1"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

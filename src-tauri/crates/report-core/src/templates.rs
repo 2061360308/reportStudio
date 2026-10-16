@@ -17,6 +17,19 @@ pub fn sanitize_id(id: &str) -> String {
         .collect()
 }
 
+/// 资源文件名：内容 sha256 前 8 位 hex + 扩展名（内容寻址，天然去重）。
+pub fn resource_name(bytes: &[u8], ext: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let hexs = hex::encode(hasher.finalize());
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    if ext.is_empty() {
+        hexs[..8].to_string()
+    } else {
+        format!("{}.{}", &hexs[..8], ext)
+    }
+}
+
 pub fn template_dir(templates_dir: &Path, id: &str) -> PathBuf {
     templates_dir.join(sanitize_id(id))
 }

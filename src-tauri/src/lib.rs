@@ -1,11 +1,11 @@
 mod commands;
-mod model;
 mod pdf;
-mod render;
-mod templates;
 
+use report_core::{render, templates};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::Manager;
 
 /// 程序目录（exe 所在的 `templates` 子目录）；取不到时退回系统临时目录。
@@ -77,32 +77,78 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .register_uri_scheme_protocol("report", |ctx, req| {
-            let state = ctx.app_handle().state::<commands::AppPaths>();
-            let rel = req.uri().path().trim_start_matches('/');
-            let decoded = percent_encoding::percent_decode_str(rel)
-                .decode_utf8_lossy()
-                .to_string();
-            let full = state.renders_dir.join(&decoded);
-            if !full.starts_with(&state.renders_dir) {
-                return tauri::http::Response::builder()
-                    .status(403)
-                    .body(Vec::new())
-                    .unwrap();
-            }
-            match fs::read(&full) {
-                Ok(bytes) => {
-                    let mime = mime_guess::from_path(&full)
-                        .first_or_octet_stream()
-                        .to_string();
-                    tauri::http::Response::builder()
-                        .header("Content-Type", mime)
-                        .body(bytes)
-                        .unwrap()
-                }
-                Err(_) => tauri::http::Response::builder()
+            let not_found = || {
+                tauri::http::Response::builder()
                     .status(404)
                     .body(Vec::new())
-                    .unwrap(),
+                    .unwrap()
+            };
+            let state = ctx.app_handle().state::<commands::AppPaths>();
+            let path = req.uri().path().to_string();
+            let decoded = percent_encoding::percent_decode_str(path.trim_start_matches('/'))
+                .decode_utf8_lossy()
+                .to_string();
+            // 期望路由：m/<mountId>/<rest>
+            let (id, rest) = match decoded.strip_prefix("m/").and_then(|s| s.split_once('/')) {
+                Some((id, rest)) => (id.to_string(), rest.to_string()),
+                None => return not_found(),
+            };
+
+            // 虚拟打印文档
+            if rest == "__print.html" {
+                let ctx2 = {
+                    let mounts = state.mounts.lock().unwrap();
+                    mounts.get(&id).map(|m| {
+                        (m.template_dir.clone(), m.manifest.clone(), m.render_values.clone())
+                    })
+                };
+                return match ctx2 {
+                    Some((tdir, manifest, values)) => {
+                        match render::render_print_html(&tdir, &manifest, &values) {
+                            Ok(html) => tauri::http::Response::builder()
+                                .header("Content-Type", "text/html; charset=utf-8")
+                                .body(html.into_bytes())
+                                .unwrap(),
+                            Err(e) => tauri::http::Response::builder()
+                                .status(500)
+                                .body(e.into_bytes())
+                                .unwrap(),
+                        }
+                    }
+                    None => not_found(),
+                };
+            }
+
+            let root = {
+                let mounts = state.mounts.lock().unwrap();
+                match mounts.get(&id) {
+                    Some(m) => {
+                        if let Some(r) = rest.strip_prefix("resources/") {
+                            (m.resources_dir.clone(), r.to_string())
+                        } else {
+                            (m.template_dir.clone(), rest.clone())
+                        }
+                    }
+                    None => return not_found(),
+                }
+            };
+            let (base, rel) = root;
+            let full = base.join(&rel);
+            let base_c = base.canonicalize().unwrap_or_else(|_| base.clone());
+            match full.canonicalize() {
+                Ok(cp) if cp.starts_with(&base_c) => match fs::read(&cp) {
+                    Ok(bytes) => {
+                        let mime = mime_guess::from_path(&cp)
+                            .first_or_octet_stream()
+                            .to_string();
+                        tauri::http::Response::builder()
+                            .header("Content-Type", mime)
+                            .body(bytes)
+                            .unwrap()
+                    }
+                    Err(_) => not_found(),
+                },
+                _ => not_found(),
             }
         })
         .setup(|app| {
@@ -160,9 +206,16 @@ pub fn run() {
                 }
             }
 
+            // 清理上一会话遗留的工程工作目录（资源工作区）
+            let work = renders_dir.join("work");
+            if work.exists() {
+                let _ = fs::remove_dir_all(&work);
+            }
+
             app.manage(commands::AppPaths {
                 templates_dir,
                 renders_dir,
+                mounts: Mutex::new(HashMap::new()),
             });
 
             // 无头自检：RS_SELFTEST=1 时，启动后自动走一遍"渲染 + 进程内 PrintToPdf"。
@@ -189,6 +242,8 @@ pub fn run() {
             commands::new_project,
             commands::render_preview,
             commands::resolve_values,
+            commands::add_resource,
+            commands::remove_resource,
             commands::generate_pdf,
             commands::print_report,
             commands::save_project,
@@ -206,18 +261,30 @@ fn self_test(handle: &tauri::AppHandle) -> Result<String, String> {
 
     let values = serde_json::Map::new();
 
-    let dir = render::new_render_dir(&state.renders_dir)?;
-    let entry = if manifest.pages.is_empty() {
-        render::render_to_dir(&tdir, &manifest, &values, &dir)?
-    } else {
-        render::render_print_document(&tdir, &manifest, &values, &dir)?
-    };
-    let rel = entry
-        .strip_prefix(&state.renders_dir)
-        .map_err(|e| e.to_string())?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let url = format!("http://report.localhost/{rel}");
+    // 注册一个挂载会话（__print.html 由协议现场生成）
+    let project_id = format!("selftest-{}", uuid::Uuid::new_v4());
+    let res_dir = state
+        .renders_dir
+        .join("work")
+        .join(&project_id)
+        .join("resources");
+    fs::create_dir_all(&res_dir).map_err(|e| e.to_string())?;
+    let resolved = render::resolve_values(&manifest, &values)?;
+    let rewritten = render::rewrite_resource_urls(
+        &manifest,
+        &resolved,
+        &format!("http://report.localhost/m/{project_id}/resources/"),
+    );
+    state.mounts.lock().unwrap().insert(
+        project_id.clone(),
+        commands::Mount {
+            template_dir: tdir.clone(),
+            resources_dir: res_dir,
+            manifest: manifest.clone(),
+            render_values: rewritten,
+        },
+    );
+    let url = format!("http://report.localhost/m/{project_id}/__print.html");
     let parsed: url::Url = url.parse().map_err(|e: url::ParseError| e.to_string())?;
 
     // 方案 A：同窗口子 webview（多 webview）
@@ -254,14 +321,15 @@ mod tests {
     #[test]
     fn settle_audit_manifest_is_valid() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/settle-audit-report");
-        let manifest = crate::templates::read_manifest(&dir).unwrap();
+        let manifest = report_core::templates::read_manifest(&dir).unwrap();
 
         assert_eq!(manifest.id, "settle-audit-report");
-        assert_eq!(manifest.entry, "pages/p01.html");
-        assert!(dir.join(&manifest.entry).exists(), "入口文件不存在");
+        assert_eq!(manifest.pages_path(), "pages");
+        assert_eq!(manifest.assets_path(), "assets");
+        assert!(dir.join("pages/p01.html").exists(), "入口文件不存在");
 
-        // 总表 22 行 → 22 个变量
-        assert_eq!(manifest.variables.len(), 22);
+        // 总表 22 行 + 营业执照图片变量 → 23 个变量
+        assert_eq!(manifest.variables.len(), 23);
 
         // 分页清单 34 页，且每页都带几何信息
         assert_eq!(manifest.pages.len(), 34);
@@ -304,12 +372,10 @@ mod tests {
     #[test]
     fn print_document_assembles_pages() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/settle-audit-report");
-        let manifest = crate::templates::read_manifest(&dir).unwrap();
+        let manifest = report_core::templates::read_manifest(&dir).unwrap();
         let values = serde_json::Map::new();
-        let out = std::env::temp_dir().join(format!("rs-print-{}", uuid::Uuid::new_v4()));
 
-        let entry = crate::render::render_print_document(&dir, &manifest, &values, &out).unwrap();
-        let html = std::fs::read_to_string(&entry).unwrap();
+        let html = report_core::render::render_print_html(&dir, &manifest, &values).unwrap();
 
         assert!(html.contains("<base href=\"pages/\">"));
         assert!(html.contains("../assets/base.css"));
@@ -317,14 +383,12 @@ mod tests {
         assert!(html.contains("@page pg2 { size: A4 landscape; margin: 0; }"));
         assert!(html.contains("data-page=\"pg1\""));
         assert!(html.contains("data-page=\"pg34\""));
-
-        std::fs::remove_dir_all(&out).ok();
     }
 
     #[test]
     fn pages_render_placeholders() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/settle-audit-report");
-        let manifest = crate::templates::read_manifest(&dir).unwrap();
+        let manifest = report_core::templates::read_manifest(&dir).unwrap();
 
         let mut values = serde_json::Map::new();
         values.insert("project_name".into(), serde_json::json!("怀仁市城镇第六小学校外墙修缮改造工程"));
@@ -341,10 +405,7 @@ mod tests {
         values.insert("scope".into(), serde_json::json!("拆除文化墙砖面层、涂料面层、雨棚、挑檐涂料面层，恢复墙面、挑檐面层"));
         values.insert("contract_date".into(), serde_json::json!("2026-09-07"));
 
-        let out = std::env::temp_dir().join(format!("rs-pages-{}", uuid::Uuid::new_v4()));
-        let entry =
-            crate::render::render_print_document(&dir, &manifest, &values, &out).unwrap();
-        let html = std::fs::read_to_string(&entry).unwrap();
+        let html = report_core::render::render_print_html(&dir, &manifest, &values).unwrap();
 
         assert!(html.contains("怀仁市城镇第六小学校外墙修缮改造工程"));
         assert!(html.contains("山西尊盛达建设工程有限公司"));
@@ -361,8 +422,6 @@ mod tests {
         );
         // 不应残留未替换的占位符
         assert!(!html.contains("{{"));
-
-        std::fs::remove_dir_all(&out).ok();
     }
 }
 

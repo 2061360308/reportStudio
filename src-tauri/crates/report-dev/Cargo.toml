@@ -1,0 +1,15 @@
+[package]
+name = "report-dev"
+version = "0.1.0"
+edition = "2021"
+description = "报告工坊模板开发服务器（仅开发期使用，不随应用打包）"
+license = "MIT"
+
+[[bin]]
+name = "report-dev"
+path = "src/main.rs"
+
+[dependencies]
+report-core = { path = "../report-core" }
+serde_json = "1"
+ctrlc = "3"

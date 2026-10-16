@@ -62,19 +62,12 @@ pub struct VariableDef {
     pub order: Option<i64>,
     #[serde(default)]
     pub readonly: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OutputDef {
+    /// image/images：允许的扩展名（如 ["png","jpg"]）
     #[serde(default)]
-    pub page_size: Option<String>,
+    pub accept: Option<Vec<String>>,
+    /// images：最多张数
     #[serde(default)]
-    pub filename: Option<String>,
-    #[serde(default)]
-    pub print_backgrounds: Option<bool>,
-    #[serde(default)]
-    pub header_footer: Option<bool>,
+    pub max: Option<i64>,
 }
 
 /// 一页的几何信息（manifest 是唯一来源，后端据此生成 @page + CSS 变量）。
@@ -83,6 +76,9 @@ pub struct OutputDef {
 pub struct PageDef {
     /// 相对模板目录的页面片段文件路径，如 "pages/p01.html"
     pub file: String,
+    /// 页面类型："fixed"（默认，固定一页）| "flow"（内容超出自动续页）
+    #[serde(default)]
+    pub mode: Option<String>,
     /// 排序号
     #[serde(default)]
     pub order: Option<i64>,
@@ -106,6 +102,13 @@ pub struct PageDef {
     pub ml: Option<String>,
 }
 
+impl PageDef {
+    /// 是否为流式页：内容超出单页时由排版引擎自动续页。
+    pub fn is_flow(&self) -> bool {
+        matches!(self.mode.as_deref(), Some("flow") | Some("FLOW") | Some("Flow"))
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TocEntry {
@@ -123,7 +126,12 @@ pub struct TemplateManifest {
     #[serde(default)]
     pub content_hash: String,
     pub name: String,
-    pub entry: String,
+    /// 资源目录（相对模板根），默认 "assets"
+    #[serde(default)]
+    pub assets_path: Option<String>,
+    /// 页面目录（相对模板根），默认 "pages"
+    #[serde(default)]
+    pub pages_path: Option<String>,
     #[serde(default)]
     pub variables: Vec<VariableDef>,
     /// 多页模板的页面清单（按 order 排序）
@@ -134,8 +142,21 @@ pub struct TemplateManifest {
     pub toc: Vec<TocEntry>,
     #[serde(default)]
     pub hooks: Map<String, Value>,
-    #[serde(default)]
-    pub output: OutputDef,
+}
+
+impl TemplateManifest {
+    pub fn assets_path(&self) -> String {
+        self.assets_path
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "assets".into())
+    }
+    pub fn pages_path(&self) -> String {
+        self.pages_path
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "pages".into())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +202,8 @@ pub struct OpenedProject {
     pub manifest: TemplateManifest,
     /// 实际使用的模板目录（内嵌快照优先，否则已安装模板目录）
     pub template_dir: String,
+    /// 挂载会话 id（协议资源路由 / 添加资源用）
+    pub project_id: String,
 }
 
 /// 预览页：渲染后页面 URL + 尺寸信息（供前端 iframe 逐页渲染）。
@@ -188,8 +211,13 @@ pub struct OpenedProject {
 #[serde(rename_all = "camelCase")]
 pub struct PreviewPage {
     pub file: String,
-    pub url: String,
+    /// 补全后的完整 HTML（前端以 srcdoc 注入）
+    pub html: String,
+    /// 缩略图变体（不收集字段标记）
+    pub thumb_html: String,
     pub size: String,
     pub orientation: String,
     pub margin: String,
+    /// "fixed" | "flow"
+    pub mode: String,
 }
