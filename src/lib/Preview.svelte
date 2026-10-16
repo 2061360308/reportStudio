@@ -49,6 +49,7 @@
   const MAX_ZOOM = 4;
 
   let pages = $state<PreviewPage[]>([]);
+  let flowHeights = $state<Record<string, number>>({});
   let error = $state("");
   let busy = $state(false);
   let zoom = $state(1);
@@ -173,11 +174,18 @@
       id?: string;
       field?: string;
       top?: number;
+      height?: number;
       items?: Occ[];
     };
     if (!d || typeof d !== "object") return;
     // 只接受主视图 iframe 的消息（缩略图带 ?thumb=1，不发送）
     if (!frames.some((f) => f && f.contentWindow === ev.source)) return;
+    if (d.type === "rs-flow-size" && d.page && typeof d.height === "number") {
+      if (flowHeights[d.page] !== d.height) {
+        flowHeights = { ...flowHeights, [d.page]: d.height };
+      }
+      return;
+    }
     if (d.type === "rs-fields" && Array.isArray(d.items)) {
       fields = [
         ...fields.filter((o) => o.page !== d.page),
@@ -266,18 +274,52 @@
     if (o) onedit?.(o.field);
   }
 
-  function nativeSize(p: PreviewPage | null) {
+  function pageSize(p: PreviewPage | null) {
     if (p && p.orientation === "landscape") return { w: A4_H, h: A4_W };
     return { w: A4_W, h: A4_H };
+  }
+
+  function nativeSize(p: PreviewPage | null) {
+    const base = pageSize(p);
+    if (p && p.mode === "flow") {
+      const fh = flowHeights[p.file];
+      if (fh && fh > base.h) return { w: base.w, h: fh };
+    }
+    return base;
   }
 
   const thumbs = $derived(
     pages.map((p) => {
       const n = nativeSize(p);
       const scale = THUMB_W / n.w;
-      return { p, nw: n.w, nh: n.h, scale, height: n.h * scale };
+      const base = pageSize(p);
+      const clip = p.mode === "flow" ? Math.min(n.h, base.h) : n.h;
+      return {
+        p,
+        nw: n.w,
+        nh: n.h,
+        scale,
+        height: clip * scale,
+        flow: p.mode === "flow",
+      };
     }),
   );
+
+  // 每个后端页的起始绝对页码（流式页按估算的物理页数累加），供目录显示。
+  const absPages = $derived.by(() => {
+    const arr: number[] = [];
+    let acc = 1;
+    for (const p of pages) {
+      arr.push(acc);
+      const base = pageSize(p).h;
+      const fh = p.mode === "flow" ? flowHeights[p.file] : undefined;
+      acc += fh && fh > 0 ? Math.max(1, Math.round(fh / base)) : 1;
+    }
+    return arr;
+  });
+  function absOf(backendPageNo: number) {
+    return absPages[backendPageNo - 1] ?? backendPageNo;
+  }
 
   function trackFrame(node: HTMLIFrameElement, i: number) {
     frames[i] = node;
@@ -302,9 +344,14 @@
     busy = true;
     error = "";
     try {
-      pages = await api.renderPreview(opened.templateDir, opened.project.values);
+      pages = await api.renderPreview(
+        opened.templateDir,
+        opened.project.values,
+        opened.projectId,
+      );
       frames = [];
       thumbEls = [];
+      flowHeights = {};
       const mem = previewMemory.get(opened.manifest.id);
       if (mem) {
         zoom = mem.zoom;
@@ -477,7 +524,7 @@
 
   function fitPage() {
     if (!stage || !pages[current]) return;
-    const n = nativeSize(pages[current]);
+    const n = pageSize(pages[current]);
     applyZoom(
       Math.min((stage.clientWidth - 24) / n.w, (stage.clientHeight - 24) / n.h),
     );
@@ -659,7 +706,7 @@
                   >
                     <iframe
                       class="thumb-iframe"
-                      src={`${t.p.url}?thumb=1`}
+                      srcdoc={t.p.thumbHtml}
                       scrolling="no"
                       tabindex="-1"
                       title={`缩略图 ${i + 1}`}
@@ -693,7 +740,7 @@
                       title={item.title}
                     >
                       <span class="toctitle">{item.title}</span>
-                      <span class="tocpage">{item.page}</span>
+                      <span class="tocpage">{absOf(item.page)}</span>
                     </button>
                   </li>
                 {/each}
@@ -802,7 +849,7 @@
         <div class="frame" style="width:{t.nw * zoom}px;height:{t.nh * zoom}px;">
           <iframe
             class="page-iframe"
-            src={t.p.url}
+            srcdoc={t.p.html}
             scrolling="no"
             title={`第 ${i + 1} 页`}
             use:trackFrame={i}

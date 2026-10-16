@@ -108,7 +108,7 @@
       return;
     }
     try {
-      await api.saveProject(projectPath, opened.project, true);
+      await api.saveProject(projectPath, opened.project, true, opened.projectId);
       opened.project.meta.updatedAt = new Date().toISOString();
       toastMsg("已保存工程");
     } catch (e) {
@@ -124,7 +124,7 @@
     });
     if (typeof out !== "string") return;
     try {
-      await api.saveProject(out, opened.project, true);
+      await api.saveProject(out, opened.project, true, opened.projectId);
       opened.project.meta.updatedAt = new Date().toISOString();
       projectPath = out;
       pushRecent({
@@ -163,7 +163,7 @@
     });
     if (typeof out !== "string") return;
     try {
-      await api.generatePdf(opened.templateDir, opened.project.values, out);
+      await api.generatePdf(opened.templateDir, opened.project.values, opened.projectId, out);
       toastMsg("已生成 PDF");
     } catch (e) {
       toastMsg(String(e));
@@ -184,7 +184,7 @@
       return;
     }
     try {
-      await api.printReport(opened.templateDir, opened.project.values);
+      await api.printReport(opened.templateDir, opened.project.values, opened.projectId);
       toastMsg("已调用打印");
     } catch (e) {
       toastMsg(String(e));
@@ -303,6 +303,7 @@
             manifest={opened.manifest}
             project={opened.project}
             templateDir={opened.templateDir}
+            projectId={opened.projectId}
             {focusReq}
           />
         {:else}

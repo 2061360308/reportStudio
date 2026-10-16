@@ -54,7 +54,7 @@
     try {
       const o = await api.newProject(selected);
       o.project.meta.name = projectName || o.project.meta.name;
-      await api.saveProject(savePath, o.project, true);
+      await api.saveProject(savePath, o.project, true, o.projectId);
       oncreated(o, savePath);
     } catch (e) {
       error = String(e);

@@ -2,17 +2,20 @@
   import { onMount } from "svelte";
   import type { Project, TemplateManifest } from "./types";
   import TableEditor from "./TableEditor.svelte";
+  import ImageEditor from "./ImageEditor.svelte";
   import * as api from "./api";
 
   let {
     manifest,
     project,
     templateDir,
+    projectId,
     focusReq,
   }: {
     manifest: TemplateManifest;
     project: Project;
     templateDir: string;
+    projectId: string;
     focusReq?: { key: string; n: number } | null;
   } = $props();
 
@@ -73,7 +76,9 @@
   {#each manifest.variables as v (v.key)}
     <div
       class="field"
-      class:wide={v.type === "text" || v.type === "table"}
+      class:wide={v.type === "text" ||
+        v.type === "table" ||
+        v.type === "images"}
       class:flash={flashKey === v.key}
       data-field={v.key}
     >
@@ -86,6 +91,8 @@
         <div class="computed">{computedText(v.key, v.unit)}</div>
       {:else if v.type === "table"}
         <TableEditor variable={v} {project} />
+      {:else if v.type === "image" || v.type === "images"}
+        <ImageEditor variable={v} {project} {projectId} />
       {:else if v.type === "text"}
         <textarea
           rows="3"

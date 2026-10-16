@@ -11,6 +11,8 @@ export type VarType =
   | "select"
   | "multiselect"
   | "table"
+  | "image"
+  | "images"
   | "computed";
 
 export interface SelectOption {
@@ -46,13 +48,10 @@ export interface VariableDef {
   group?: string;
   order?: number;
   readonly?: boolean;
-}
-
-export interface OutputDef {
-  pageSize?: string;
-  filename?: string;
-  printBackgrounds?: boolean;
-  headerFooter?: boolean;
+  /** image/images：允许的扩展名（如 ["png","jpg"]） */
+  accept?: string[];
+  /** images：最多张数 */
+  max?: number;
 }
 
 export interface TemplateManifest {
@@ -61,16 +60,17 @@ export interface TemplateManifest {
   version: string;
   contentHash: string;
   name: string;
-  entry: string;
+  assetsPath?: string;
+  pagesPath?: string;
   variables: VariableDef[];
   pages?: PageDef[];
   toc?: TocEntry[];
   hooks?: Record<string, string>;
-  output?: OutputDef;
 }
 
 export interface PageDef {
   file: string;
+  mode?: "fixed" | "flow";
   order?: number;
   size?: string;
   orientation?: string;
@@ -116,6 +116,7 @@ export interface OpenedProject {
   project: Project;
   manifest: TemplateManifest;
   templateDir: string;
+  projectId: string;
 }
 
 export interface RecentItem {
@@ -126,8 +127,10 @@ export interface RecentItem {
 
 export interface PreviewPage {
   file: string;
-  url: string;
+  html: string;
+  thumbHtml: string;
   size: string;
   orientation: string;
   margin: string;
+  mode: "fixed" | "flow";
 }
