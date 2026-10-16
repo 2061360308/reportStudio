@@ -1,0 +1,207 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #171717;
+  --color-card: #ffffff;
+  --color-card-foreground: #171717;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #171717;
+  --color-primary: #171717;
+  --color-primary-foreground: #fafafa;
+  --color-secondary: #f5f5f5;
+  --color-secondary-foreground: #171717;
+  --color-muted: #f5f5f5;
+  --color-muted-foreground: #737373;
+  --color-accent: #f5f5f5;
+  --color-accent-foreground: #171717;
+  --color-destructive: #dc2626;
+  --color-border: #e5e5e5;
+  --color-input: #e5e5e5;
+  --color-ring: #a1a1a1;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+}
+
+:root {
+  /* ---------- Fonts (Geist + CJK fallbacks) ---------- */
+  --font-sans: "Geist", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans SC", "Segoe UI", system-ui, Arial, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Code", Consolas, Menlo,
+    monospace;
+
+  /* ---------- Color: achromatic core ---------- */
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --surface-50: #fafafa;
+  --surface-100: #f2f2f2;
+  --text: #171717;
+  --text-secondary: #4d4d4d;
+  --muted: #666666;
+  --placeholder: #808080;
+  --border: #ebebeb;
+
+  /* Ring / border-as-shadow */
+  --ring: rgba(0, 0, 0, 0.08);
+  --ring-light: rgb(235, 235, 235);
+
+  /* ---------- Interactive ---------- */
+  --accent: #171717;
+  --link: #0072f5;
+  --focus: hsla(212, 100%, 48%, 1);
+  --danger: #ff5b4f;
+
+  /* Workflow accents (functional only) */
+  --develop: #0a72ef;
+  --preview: #de1d8d;
+  --ship: #ff5b4f;
+
+  /* Badge */
+  --badge-bg: #ebf5ff;
+  --badge-text: #0068d6;
+
+  /* ---------- Shadow stacks ---------- */
+  --shadow-border: rgba(0, 0, 0, 0.08) 0px 0px 0px 1px;
+  --shadow-card: rgba(0, 0, 0, 0.08) 0px 0px 0px 1px,
+    rgba(0, 0, 0, 0.04) 0px 2px 2px, #fafafa 0px 0px 0px 1px;
+  --shadow-elev: rgba(0, 0, 0, 0.08) 0px 0px 0px 1px,
+    rgba(0, 0, 0, 0.04) 0px 2px 2px, rgba(0, 0, 0, 0.04) 0px 8px 8px -8px,
+    #fafafa 0px 0px 0px 1px;
+
+  /* ---------- Radius ---------- */
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 9999px;
+
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  font-feature-settings: "liga" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+}
+
+/* ---------- Buttons ---------- */
+@layer base {
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.4;
+    padding: 7px 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: var(--shadow-border);
+    cursor: pointer;
+    transition:
+      background-color 0.15s ease,
+      box-shadow 0.15s ease,
+      color 0.15s ease;
+  }
+
+  button:hover:not(:disabled) {
+    background: var(--surface-50);
+  }
+
+  button:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+
+  button.primary {
+    background: var(--text);
+    color: #ffffff;
+    box-shadow: none;
+  }
+
+  button.primary:hover:not(:disabled) {
+    background: #000000;
+  }
+
+  button:disabled {
+    color: var(--placeholder);
+    background: var(--surface-50);
+    box-shadow: var(--shadow-border);
+    cursor: not-allowed;
+  }
+
+  button.primary:disabled {
+    background: var(--surface-100);
+    color: var(--placeholder);
+  }
+
+  /* ---------- Inputs ---------- */
+  input,
+  select,
+  textarea {
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--panel);
+    border: none;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-border);
+    padding: 7px 10px;
+    transition: box-shadow 0.15s ease;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus {
+    outline: none;
+    box-shadow:
+      rgba(0, 0, 0, 0.08) 0px 0px 0px 1px,
+      0 0 0 4px rgba(0, 114, 245, 0.12);
+  }
+
+  ::placeholder {
+    color: var(--placeholder);
+  }
+}
+
+/* Keep the app menu bar free of the global button chrome so it matches
+   the upstream component styling (the menubar triggers are <button>s). */
+@layer base {
+  .menubar button {
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+    border-radius: 0;
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: inherit;
+    color: inherit;
+  }
+}
+
+/* ---------- Utility type ---------- */
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings:
+    "liga" 1,
+    "tnum" 1;
+}

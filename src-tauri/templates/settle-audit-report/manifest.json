@@ -1,0 +1,599 @@
+{
+  "schemaVersion": 1,
+  "id": "settle-audit-report",
+  "version": "1.0.0",
+  "contentHash": "",
+  "name": "竣工结算审核报告",
+  "entry": "pages/p01.html",
+  "variables": [
+    {
+      "key": "project_name",
+      "alias": "工程名称",
+      "type": "string",
+      "required": true,
+      "sample": "怀仁市城镇第六小学校外墙修缮改造工程"
+    },
+    {
+      "key": "site",
+      "alias": "工程地点",
+      "type": "string",
+      "sample": "怀仁市城镇第六小学校"
+    },
+    {
+      "key": "owner",
+      "alias": "建设单位",
+      "type": "string",
+      "required": true,
+      "sample": "怀仁市城镇第六小学校"
+    },
+    {
+      "key": "contractor",
+      "alias": "施工单位",
+      "type": "string",
+      "required": true,
+      "sample": "山西尊盛达建设工程有限公司"
+    },
+    {
+      "key": "agency",
+      "alias": "中介机构",
+      "type": "string",
+      "sample": "山西红实工程项目管理有限公司"
+    },
+    {
+      "key": "contract_no",
+      "alias": "委托合同书编号",
+      "type": "string",
+      "sample": "SXHS-2026-243"
+    },
+    {
+      "key": "audit_date",
+      "alias": "审定日期",
+      "type": "computed",
+      "expression": "audit_end_date"
+    },
+    {
+      "key": "reported_amount",
+      "alias": "报审金额",
+      "type": "money",
+      "unit": "元",
+      "required": true,
+      "sample": 140422.9
+    },
+    {
+      "key": "audit_fee",
+      "alias": "审计费",
+      "type": "computed",
+      "unit": "元",
+      "expression": "((reported_amount * 0.0035 + deducted_amount * 0.06) | round)"
+    },
+    {
+      "key": "deducted_amount",
+      "alias": "核减金额",
+      "type": "computed",
+      "unit": "元",
+      "expression": "reported_amount - approved_amount"
+    },
+    {
+      "key": "approved_amount",
+      "alias": "审定金额",
+      "type": "money",
+      "unit": "元",
+      "required": true,
+      "sample": 135613.17
+    },
+    {
+      "key": "survey_date",
+      "alias": "现场勘测时间",
+      "type": "computed",
+      "expression": "plan_start_date"
+    },
+    {
+      "key": "start_date",
+      "alias": "工程开工时间",
+      "type": "date",
+      "sample": "2026-07-27"
+    },
+    {
+      "key": "end_date",
+      "alias": "工程竣工时间",
+      "type": "date",
+      "sample": "2026-08-18"
+    },
+    {
+      "key": "accept_date",
+      "alias": "工程验收时间",
+      "type": "date",
+      "sample": "2026-08-20"
+    },
+    {
+      "key": "plan_start_date",
+      "alias": "审计计划开工时间",
+      "type": "date",
+      "sample": "2026-09-07"
+    },
+    {
+      "key": "plan_end_date",
+      "alias": "审计计划竣工时间",
+      "type": "date",
+      "sample": "2026-09-11"
+    },
+    {
+      "key": "audit_start_date",
+      "alias": "审计开工时间",
+      "type": "computed",
+      "expression": "plan_start_date"
+    },
+    {
+      "key": "audit_end_date",
+      "alias": "审计竣工时间",
+      "type": "computed",
+      "expression": "plan_end_date"
+    },
+    {
+      "key": "auditor",
+      "alias": "审计人员",
+      "type": "string",
+      "sample": "张美青"
+    },
+    {
+      "key": "scope",
+      "alias": "工程内容",
+      "type": "text",
+      "help": "20字以内",
+      "sample": "拆除文化墙砖面层、涂料面层、雨棚、挑檐涂料面层，恢复墙面、挑檐面层"
+    },
+    {
+      "key": "contract_date",
+      "alias": "审计合同签订日期",
+      "type": "date",
+      "sample": "2026-09-07"
+    }
+  ],
+  "output": {
+    "pageSize": "A4",
+    "printBackgrounds": true,
+    "headerFooter": false
+  },
+  "toc": [
+    {
+      "title": "结算审核报告（封面）",
+      "page": 1
+    },
+    {
+      "title": "编制说明",
+      "page": 2
+    },
+    {
+      "title": "竣工结算审核书（封面）",
+      "page": 3
+    },
+    {
+      "title": "竣工结算审核报告",
+      "page": 4
+    },
+    {
+      "title": "竣工结算审定签署表",
+      "page": 6
+    },
+    {
+      "title": "基本建设工程结算审核定案表",
+      "page": 7
+    },
+    {
+      "title": "竣工结算审核汇总对比表",
+      "page": 8
+    },
+    {
+      "title": "建设工程结算书",
+      "page": 9
+    },
+    {
+      "title": "现场勘测表",
+      "page": 10
+    },
+    {
+      "title": "会议纪要",
+      "page": 11
+    },
+    {
+      "title": "工程造价咨询交换意见记录表",
+      "page": 12
+    },
+    {
+      "title": "承诺书",
+      "page": 13
+    },
+    {
+      "title": "营业执照",
+      "page": 14
+    },
+    {
+      "title": "身份证",
+      "page": 15
+    },
+    {
+      "title": "建设工程造价咨询合同",
+      "page": 16
+    },
+    {
+      "title": "建设工程造价咨询合同（附件）",
+      "page": 19
+    }
+  ],
+  "pages": [
+    {
+      "file": "pages/p01.html",
+      "order": 1,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "17.07mm",
+      "mb": "0.00mm",
+      "ml": "18.54mm"
+    },
+    {
+      "file": "pages/p02.html",
+      "order": 2,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "44.54mm",
+      "mb": "0.00mm",
+      "ml": "20.13mm"
+    },
+    {
+      "file": "pages/p03.html",
+      "order": 3,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.93mm",
+      "mb": "0.00mm",
+      "ml": "22.12mm"
+    },
+    {
+      "file": "pages/p04.html",
+      "order": 4,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.70mm",
+      "mb": "0.00mm",
+      "ml": "13.00mm"
+    },
+    {
+      "file": "pages/p05.html",
+      "order": 5,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.70mm",
+      "mb": "0.00mm",
+      "ml": "12.98mm"
+    },
+    {
+      "file": "pages/p06.html",
+      "order": 6,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.43mm",
+      "mb": "0.00mm",
+      "ml": "18.54mm"
+    },
+    {
+      "file": "pages/p07.html",
+      "order": 7,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "23.51mm",
+      "mb": "0.00mm",
+      "ml": "22.77mm"
+    },
+    {
+      "file": "pages/p08.html",
+      "order": 8,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "33.28mm",
+      "mb": "0.00mm",
+      "ml": "18.87mm"
+    },
+    {
+      "file": "pages/p09.html",
+      "order": 9,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "41.13mm",
+      "mb": "0.00mm",
+      "ml": "21.87mm"
+    },
+    {
+      "file": "pages/p10.html",
+      "order": 10,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.10mm",
+      "mb": "0.00mm",
+      "ml": "20.69mm"
+    },
+    {
+      "file": "pages/p11.html",
+      "order": 11,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "19.72mm",
+      "mb": "0.00mm",
+      "ml": "18.98mm"
+    },
+    {
+      "file": "pages/p12.html",
+      "order": 12,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "23.53mm",
+      "mb": "0.00mm",
+      "ml": "23.12mm"
+    },
+    {
+      "file": "pages/p13.html",
+      "order": 13,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "23.34mm",
+      "mb": "0.00mm",
+      "ml": "20.44mm"
+    },
+    {
+      "file": "pages/p14.html",
+      "order": 14,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "39.76mm",
+      "mb": "0.00mm",
+      "ml": "25.10mm"
+    },
+    {
+      "file": "pages/p15.html",
+      "order": 15,
+      "size": "A4",
+      "orientation": "landscape",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "44.54mm",
+      "mb": "0.00mm",
+      "ml": "44.54mm"
+    },
+    {
+      "file": "pages/p16.html",
+      "order": 16,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "27.34mm",
+      "mr": "0.00mm",
+      "mb": "44.54mm",
+      "ml": "7.06mm"
+    },
+    {
+      "file": "pages/p17.html",
+      "order": 17,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.37mm",
+      "mb": "7.06mm",
+      "ml": "19.23mm"
+    },
+    {
+      "file": "pages/p18.html",
+      "order": 18,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.43mm",
+      "mb": "7.06mm",
+      "ml": "19.24mm"
+    },
+    {
+      "file": "pages/p19.html",
+      "order": 19,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.50mm",
+      "mb": "7.06mm",
+      "ml": "19.24mm"
+    },
+    {
+      "file": "pages/p20.html",
+      "order": 20,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.50mm",
+      "mb": "7.06mm",
+      "ml": "19.00mm"
+    },
+    {
+      "file": "pages/p21.html",
+      "order": 21,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.76mm",
+      "mb": "7.06mm",
+      "ml": "19.00mm"
+    },
+    {
+      "file": "pages/p22.html",
+      "order": 22,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.76mm",
+      "mb": "7.06mm",
+      "ml": "19.24mm"
+    },
+    {
+      "file": "pages/p23.html",
+      "order": 23,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.34mm",
+      "mb": "7.06mm",
+      "ml": "19.90mm"
+    },
+    {
+      "file": "pages/p24.html",
+      "order": 24,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "24.15mm",
+      "mb": "7.06mm",
+      "ml": "23.78mm"
+    },
+    {
+      "file": "pages/p25.html",
+      "order": 25,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.31mm",
+      "mb": "7.06mm",
+      "ml": "21.33mm"
+    },
+    {
+      "file": "pages/p26.html",
+      "order": 26,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.31mm",
+      "mb": "7.06mm",
+      "ml": "19.05mm"
+    },
+    {
+      "file": "pages/p27.html",
+      "order": 27,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "21.80mm",
+      "mb": "7.06mm",
+      "ml": "19.05mm"
+    },
+    {
+      "file": "pages/p28.html",
+      "order": 28,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "24.91mm",
+      "mb": "7.06mm",
+      "ml": "22.98mm"
+    },
+    {
+      "file": "pages/p29.html",
+      "order": 29,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "25.58mm",
+      "mb": "7.06mm",
+      "ml": "22.98mm"
+    },
+    {
+      "file": "pages/p30.html",
+      "order": 30,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "27.69mm",
+      "mb": "7.06mm",
+      "ml": "25.10mm"
+    },
+    {
+      "file": "pages/p31.html",
+      "order": 31,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "25.79mm",
+      "mb": "7.06mm",
+      "ml": "25.10mm"
+    },
+    {
+      "file": "pages/p32.html",
+      "order": 32,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "24.57mm",
+      "mb": "7.06mm",
+      "ml": "24.29mm"
+    },
+    {
+      "file": "pages/p33.html",
+      "order": 33,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.71mm",
+      "mb": "7.06mm",
+      "ml": "20.30mm"
+    },
+    {
+      "file": "pages/p34.html",
+      "order": 34,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "7.06mm",
+      "mr": "20.71mm",
+      "mb": "7.06mm",
+      "ml": "20.30mm"
+    }
+  ]
+}
