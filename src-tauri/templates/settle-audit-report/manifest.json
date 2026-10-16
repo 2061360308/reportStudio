@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "contentHash": "",
   "name": "竣工结算审核报告",
-  "entry": "pages/p01.html",
   "variables": [
     {
       "key": "project_name",
@@ -147,13 +146,15 @@
       "alias": "审计合同签订日期",
       "type": "date",
       "sample": "2026-09-07"
+    },
+    {
+      "key": "business_license",
+      "alias": "营业执照",
+      "type": "image",
+      "accept": ["png", "jpg", "jpeg", "bmp", "webp"],
+      "default": "assets/image8.png"
     }
   ],
-  "output": {
-    "pageSize": "A4",
-    "printBackgrounds": true,
-    "headerFooter": false
-  },
   "toc": [
     {
       "title": "结算审核报告（封面）",

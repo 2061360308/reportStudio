@@ -5,20 +5,26 @@ html,body{margin:0;padding:0;background:#fff;
 .page{position:relative;overflow:hidden;width:100%;height:100%;}
 .paper .page{outline:none;}
 p{margin:.25em 0;line-height:1.5;text-align:justify;}
-.cover{display:flex;flex-direction:column;align-items:center;height:calc(100% - 50mm);margin:21.5mm 0 28.5mm;text-align:center;border:0.5pt solid #000;box-sizing:border-box;}
+.cover{display:flex;flex-direction:column;height:calc(100% - 50mm);margin:21.5mm 0 28.5mm;text-align:center;border:0.5pt solid #000;box-sizing:border-box;}
 .cover p{text-align:center;margin:0;max-width:100%;overflow-wrap:anywhere;}
-.cover .c-title{font-weight:700;font-size:17.5pt;margin-top:25mm;}
-.cover .c-main{font-weight:700;font-size:35.5pt;margin-top:28.5mm;}
-.cover .c-sub{font-weight:700;font-size:14.0pt;margin-top:34.7mm;}
-.cover .c-org{font-weight:700;font-size:19.5pt;margin-top:49.3mm;}
+.cv-top{flex:none;padding-top:25mm;}
+.cv-mid{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;justify-content:center;align-items:center;}
+.cv-bot{flex:none;padding-bottom:10mm;}
+.cover .c-title{font-weight:700;font-size:17.5pt;}
+.cover .c-main{font-weight:700;font-size:35.5pt;}
+.cover .c-sub{font-weight:700;font-size:14.0pt;margin-top:20mm;}
+.cover .c-org{font-weight:700;font-size:19.5pt;}
 .cover .c-date{font-weight:700;font-size:15.5pt;margin-top:13mm;}
-.vcover{display:flex;flex-direction:column;align-items:center;text-align:center;height:100%;}
+.vcover{display:flex;flex-direction:column;text-align:center;height:100%;}
+.vc-top{flex:none;width:100%;padding-top:30mm;}
+.vc-mid{flex:1 1 auto;min-height:0;width:100%;display:flex;flex-direction:column;justify-content:center;align-items:center;}
+.vc-bottom{flex:none;width:100%;padding-bottom:40mm;}
 .vcover p{margin:0;max-width:100%;overflow-wrap:anywhere;}
-.vcover .p3-title{font-weight:700;font-size:25.5pt;margin-top:30mm;}
-.vcover .p3-main{font-weight:700;font-size:41.5pt;font-family:"黑体";margin-top:20mm;}
-.vcover .p3-no{font-weight:700;font-size:15.5pt;margin-top:12mm;}
-.vcover .p3-org{font-weight:700;font-size:21.5pt;margin-top:54mm;}
-.vcover .p3-date{font-weight:700;font-size:17.5pt;margin-top:14mm;}
+.vcover .p3-title{width:100%;text-align:center;font-weight:700;font-size:25.5pt;}
+.vcover .p3-main{font-weight:700;font-size:41.5pt;font-family:"黑体";transform:translateY(-8mm);}
+.vcover .p3-no{width:100%;text-align:center;font-weight:700;font-size:15.5pt;margin-top:12mm;}
+.vcover .p3-org{width:100%;text-align:center;font-weight:700;font-size:21.5pt;}
+.vcover .p3-date{width:100%;text-align:center;font-weight:700;font-size:17.5pt;margin-top:14mm;}
 .page.fit{display:flex;flex-direction:column;}
 .page.fit>.doc-tbl{flex:1 1 auto;}
 .pgv{padding:18mm 0 42mm;box-sizing:border-box;}
@@ -35,7 +41,7 @@ table.doc-tbl.nb.g18 td{padding:1mm 4px;vertical-align:top;}
 .sp{margin:0;line-height:1.5;}
 .pg16{display:flex;flex-direction:column;height:100%;}
 .pg16 .sp{margin:0;line-height:1.5;}
-.pg16foot{display:flex;align-items:center;justify-content:center;gap:12mm;margin-top:auto;margin-bottom:44mm;}
+.pg16foot{display:flex;align-items:center;justify-content:center;gap:3mm;margin-top:auto;margin-bottom:44mm;}
 .pg16 .pg16foot p{margin:0;text-align:center;}
 .pg2{font-size:12pt;}
 .pg2 p{margin:0;}
@@ -49,7 +55,26 @@ table.doc-tbl.nb.g18 td{padding:1mm 4px;vertical-align:top;}
 .scanimg{max-width:100%;max-height:100%;height:auto;}
 img.inline{vertical-align:middle;}
 table.doc-tbl{width:100%;border-collapse:collapse;table-layout:fixed;margin:.3em 0;font-size:9.5pt;}
+table.doc-tbl.f135{font-size:13.5pt;}
+/* 自适应字号单元格：基准 13.5pt，超出 data-max 字数由模板 JS 调小 */
+table.doc-tbl td.fit{font-size:13.5pt;}
+/* 现场勘测表：竖排文字，单元格内双向居中 */
+table.doc-tbl td.vcell{position:relative;padding:0;vertical-align:middle;}
+table.doc-tbl td.vcell>.vwrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}
+table.doc-tbl td.vcell>.vwrap p{writing-mode:vertical-rl;text-orientation:upright;letter-spacing:4px;font-size:15.5pt;margin:0;}
 table.doc-tbl td{border:0.5pt solid #000;padding:2px 4px;vertical-align:top;word-break:break-all;}
+/* 数据行单元格：水平垂直居中（签署行除外） */
+table.doc-tbl tr.ctr td{text-align:center;vertical-align:middle;}
+table.doc-tbl tr.ctr td p{text-align:center;}
+/* 签署行：单元格内上下两端对齐（上组贴顶、下组贴底）
+   td 高度由表格分配得出，非确定高度，故用绝对定位让 .sig 填满单元格 */
+table.doc-tbl td.sigcell{position:relative;padding:0;height:45mm;vertical-align:top;}
+table.doc-tbl td.sigcell>.sig{position:absolute;inset:0;box-sizing:border-box;padding:2px 4px;display:flex;flex-direction:column;justify-content:space-between;}
+/* 定案表签署行：每列上下两端对齐（子单元格隔开，内边线隐藏） */
+table.doc-tbl td.sigrow{padding:0;}
+table.doc-tbl td.sigrow>table.siggrid{width:100%;height:100%;border-collapse:collapse;table-layout:auto;font-size:13.5pt;}
+table.doc-tbl td.sigrow>table.siggrid td{border:0;padding:2px 4px;vertical-align:top;word-break:normal;}
+table.doc-tbl td.sigrow .sigcol{display:flex;flex-direction:column;justify-content:space-between;height:100%;min-height:38mm;}
 @media print{
   html,body{background:#fff;}
   .paper{margin:0;box-shadow:none;page-break-after:always;}
