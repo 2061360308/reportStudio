@@ -57,13 +57,26 @@ jobs:
       - name: 下载最新应用与模板
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAGES_CUSTOM_DOMAIN: ${{ vars.PAGES_CUSTOM_DOMAIN }}
         run: |
+          PAGES_BASE_URL="${PAGES_CUSTOM_DOMAIN:-oilu.cn/reportStudio}"
+          case "$PAGES_BASE_URL" in
+            http://*|https://*) ;;
+            *) PAGES_BASE_URL="https://$PAGES_BASE_URL" ;;
+          esac
+          PAGES_BASE_URL="${PAGES_BASE_URL%/}/"
           node scripts/prepare-pages-downloads.mjs \
             --latest .release/latest.json \
             --docs docs \
-            --repo "${{ github.repository }}"
+            --repo "${{ github.repository }}" \
+            --base-url "$PAGES_BASE_URL"
 
       - uses: actions/configure-pages@v5
+        with:
+          # 可选：配置 PAGES_TOKEN（PAT，repo 或 Pages write 权限）后自动启用 Pages。
+          # 未配置时必须先在 Settings → Pages → Source 选择 GitHub Actions。
+          enablement: ${{ secrets.PAGES_TOKEN != '' }}
+          token: ${{ secrets.PAGES_TOKEN || github.token }}
 
       - uses: actions/upload-pages-artifact@v3
         with:

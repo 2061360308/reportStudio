@@ -130,8 +130,9 @@ on:
 1. 签出默认分支
 2. 下载最新 Release 的 `latest.json`
 3. 运行 `scripts/prepare-pages-downloads.mjs`，下载 x64 / ARM64 安装包与全部最新模板
-4. 上传 `docs/` 为 Pages artifact
-5. 部署到 GitHub Pages
+4. 生成改写为 Pages 地址的 `latest.json`
+5. 上传 `docs/` 为 Pages artifact
+6. 部署到 GitHub Pages
 
 下载步骤使用 `GITHUB_TOKEN` 访问 Release 资产，避免匿名请求限流。如果仓库还没有任何
 Release，工作流只部署 Docsify 文档，封面按钮回退到 Releases。
@@ -146,7 +147,8 @@ Release，工作流只部署 Docsify 文档，封面按钮回退到 Releases。
 node scripts/prepare-pages-downloads.mjs \
   --latest .release/latest.json \
   --docs docs \
-  --repo <owner>/<repo>
+  --repo <owner>/<repo> \
+  --base-url https://<owner>.github.io/<repo>/
 ```
 
 参数：
@@ -156,6 +158,7 @@ node scripts/prepare-pages-downloads.mjs \
 | `--latest` | `latest.json` 路径；不存在时跳过下载资源 |
 | `--docs` | 文档目录，默认 `docs` |
 | `--repo` | GitHub 仓库，用于生成 Releases 链接；默认读 `GITHUB_REPOSITORY` |
+| `--base-url` | Pages 站点根地址；默认 `https://oilu.cn/reportStudio/` |
 
 行为：
 
@@ -164,8 +167,14 @@ node scripts/prepare-pages-downloads.mjs \
 - 同时保留 `windows-x86_64-nsis` 与 `windows-aarch64-nsis` 两个 CPU 版本
 - 下载每个模板为 `<id>-<version>.zip`
 - 校验模板 `sha256` 和 `size`
-- 复制一份 `latest.json` 到 `docs/downloads/latest.json`
+- 生成改写后的 `docs/downloads/latest.json`：
+  - `platforms[*].url` 改为 Pages 上的安装包地址
+  - `templates[*].url` 改为 Pages 上的模板地址
+  - `signature`、`sha256`、`size` 保持原值
 - 生成 `docs/downloads/index.json`
+
+`docs/downloads/latest.json` 不是原样复制，而是 Pages 专用清单。应用自动更新和模板同步
+会优先读取这个地址，失败时回退到 GitHub Release 的 `latest.json`。
 
 `index.json` 结构：
 
@@ -233,6 +242,33 @@ node scripts/prepare-pages-downloads.mjs \
 https://<owner>.github.io/<repo>/
 ```
 
+默认 Pages 下载地址为：
+
+```
+https://oilu.cn/reportStudio/
+```
+
+如果之后绑定自定义域名，在 **Settings → Secrets and variables → Actions → Variables**
+中添加仓库变量：
+
+| 变量 | 示例值 | 说明 |
+| --- | --- | --- |
+| `PAGES_CUSTOM_DOMAIN` | `oilu.cn/reportStudio` | 自定义域名/站点路径，可带或不带 `https://` |
+
+工作流会将 `PAGES_CUSTOM_DOMAIN` 作为 `--base-url` 传给下载脚本；未设置时使用上面的
+默认地址。还需要在 **Settings → Pages → Custom domain** 中同步填写该域名。保存变量或
+更换域名后，手动运行一次 `pages` 工作流，重新生成带新域名的 `downloads/latest.json`，
+并重新发版以更新应用内置的 Pages 更新地址。
+
+如果希望工作流自动启用 Pages，可在 **Settings → Secrets and variables → Actions → Secrets**
+中添加：
+
+| Secret | 说明 |
+| --- | --- |
+| `PAGES_TOKEN` | PAT，需具备 `repo` 权限或 Pages write 权限 |
+
+未配置 `PAGES_TOKEN` 时，必须手动把 Pages Source 设为 **GitHub Actions**。
+
 ---
 
 ## 8. 常见问题
@@ -254,6 +290,15 @@ https://<owner>.github.io/<repo>/
 
 当前 `latest.json` / `downloads/index.json` 只包含一个 CPU 架构。确认 `release` 工作流的
 `build-app` 矩阵同时成功构建了 x64 与 ARM64。
+
+**报错 `Get Pages site failed` / `Not Found`**
+
+工作流发现仓库还没有启用 Pages，或 Pages Source 不是 GitHub Actions。
+
+- 手动：**Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**
+- 自动：添加 `PAGES_TOKEN` Secret（PAT，具备 `repo` 或 Pages write 权限），然后重跑
+  `pages` 工作流
+- 私有仓库需要 GitHub Enterprise 才能使用 Pages
 
 **Release 后封面按钮没有更新**
 

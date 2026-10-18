@@ -3,13 +3,35 @@ import fs from "node:fs";
 import path from "node:path";
 import { ROOT, parseArgs } from "./version-utils.mjs";
 
+const DEFAULT_PAGES_BASE_URL = "https://oilu.cn/reportStudio/";
+
 const args = parseArgs(process.argv.slice(2));
 const docsDir = path.resolve(args.docs ?? path.join(ROOT, "docs"));
 const latestPath = args.latest ? path.resolve(args.latest) : null;
 const repo = args.repo ?? process.env.GITHUB_REPOSITORY ?? "2061360308/reportStudio";
 const downloadsDir = path.join(docsDir, "downloads");
 const indexJsonPath = path.join(downloadsDir, "index.json");
+const latestJsonPath = path.join(downloadsDir, "latest.json");
 const releaseUrl = `https://github.com/${repo}/releases`;
+
+function normalizeBaseUrl(value) {
+  const raw = String(value || DEFAULT_PAGES_BASE_URL).trim();
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  const url = new URL(withScheme);
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol !== "https:" && !local) {
+    throw new Error("Pages 下载地址必须使用 HTTPS");
+  }
+  return url.href.endsWith("/") ? url.href : `${url.href}/`;
+}
+
+function pagesAssetUrl(file) {
+  return new URL(`downloads/${file.replace(/^\/+/, "")}`, pagesBaseUrl).href;
+}
+
+const pagesBaseUrl = normalizeBaseUrl(
+  args["base-url"] ?? process.env.PAGES_BASE_URL ?? DEFAULT_PAGES_BASE_URL,
+);
 
 function safeName(value) {
   return (
@@ -92,6 +114,7 @@ async function main() {
   const version = String(latest.version ?? "0.0.0");
   const platforms = latest.platforms ?? {};
   const platformEntries = [];
+  const downloadedFiles = new Map();
   const seenUrls = new Set();
 
   for (const [key, platform] of Object.entries(platforms)) {
@@ -101,6 +124,7 @@ async function main() {
     const ext = platformExtension(platform.url);
     const file = `report-studio_${safeName(version)}_${safeName(key)}${ext}`;
     await download(platform.url, path.join(downloadsDir, file));
+    downloadedFiles.set(platform.url, file);
     platformEntries.push({
       key,
       label: platformLabel(key),
@@ -132,6 +156,7 @@ async function main() {
     const templateVersion = String(template.version ?? "1.0.0");
     const file = `${id}-${safeName(templateVersion)}.zip`;
     const buffer = await download(template.url, path.join(downloadsDir, file));
+    downloadedFiles.set(template.url, file);
 
     if (template.sha256) {
       const actual = crypto.createHash("sha256").update(buffer).digest("hex");
@@ -167,9 +192,31 @@ async function main() {
     templates: templateEntries,
   };
 
+  const mirroredLatest = JSON.parse(JSON.stringify(latest));
+  for (const [key, platform] of Object.entries(mirroredLatest.platforms ?? {})) {
+    if (!platform?.url) continue;
+    const file = downloadedFiles.get(platform.url);
+    if (!file) {
+      throw new Error(`安装包 ${key} 未下载到 Pages，无法改写 latest.json`);
+    }
+    platform.url = pagesAssetUrl(file);
+  }
+  if (Array.isArray(mirroredLatest.templates)) {
+    for (const template of mirroredLatest.templates) {
+      if (!template?.url) continue;
+      const file = downloadedFiles.get(template.url);
+      if (!file) {
+        throw new Error(`模板 ${template?.id ?? "unknown"} 未下载到 Pages`);
+      }
+      template.url = pagesAssetUrl(file);
+    }
+  }
+
   fs.writeFileSync(indexJsonPath, `${JSON.stringify(index, null, 2)}\n`, "utf8");
-  fs.copyFileSync(latestPath, path.join(downloadsDir, "latest.json"));
+  fs.writeFileSync(latestJsonPath, `${JSON.stringify(mirroredLatest, null, 2)}\n`, "utf8");
   console.log(`下载索引：${indexJsonPath}`);
+  console.log(`Pages 清单：${latestJsonPath}`);
+  console.log(`Pages 地址：${pagesBaseUrl}`);
 }
 
 main().catch((error) => {

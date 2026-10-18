@@ -84,11 +84,17 @@ jobs:
         shell: pwsh
         env:
           UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+          PAGES_CUSTOM_DOMAIN: ${{ vars.PAGES_CUSTOM_DOMAIN }}
         run: |
           if (-not $env:UPDATER_PUBKEY) { throw "请在仓库 Variables 中配置 TAURI_UPDATER_PUBKEY" }
+          $pagesBase = if ($env:PAGES_CUSTOM_DOMAIN) { $env:PAGES_CUSTOM_DOMAIN } else { "oilu.cn/reportStudio" }
+          if ($pagesBase -notmatch '^https?://') { $pagesBase = "https://$pagesBase" }
+          $pagesBase = $pagesBase.TrimEnd('/')
+          $pagesEndpoint = "$pagesBase/downloads/latest.json"
+          $releaseEndpoint = "https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
           Set-Content -Path updater.pub -Value $env:UPDATER_PUBKEY -NoNewline
           node scripts/configure-updater.mjs `
-            --endpoint "https://github.com/${{ github.repository }}/releases/latest/download/latest.json" `
+            --endpoints "$pagesEndpoint,$releaseEndpoint" `
             --pubkey-file updater.pub
 
       - name: 构建应用（${{ matrix.arch }}）

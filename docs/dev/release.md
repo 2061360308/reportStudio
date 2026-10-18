@@ -16,11 +16,14 @@
 - **一个 Release 对应一轮发布**：无论本轮只发应用、只发模板，还是新增模板，所有本轮产物和
   `latest.json` 都放在同一个 Release 里。
 
-客户端读取的固定地址：
+客户端按顺序读取的更新清单地址：
 
 ```
+https://oilu.cn/reportStudio/downloads/latest.json
 https://github.com/2061360308/reportStudio/releases/latest/download/latest.json
 ```
+
+优先使用 Pages 清单；Pages 不可用、返回非 2xx 或清单无法解析时，回退到 GitHub Release。
 
 ---
 
@@ -72,7 +75,7 @@ npm run tauri signer generate -- -w $HOME\.tauri\report-studio.key
 
 ```powershell
 npm run updater:configure -- `
-  --endpoint "https://github.com/2061360308/reportStudio/releases/latest/download/latest.json" `
+  --endpoints "https://oilu.cn/reportStudio/downloads/latest.json,https://github.com/2061360308/reportStudio/releases/latest/download/latest.json" `
   --pubkey-file "$HOME\.tauri\report-studio.key.pub"
 ```
 
@@ -91,6 +94,7 @@ npm run updater:configure
 | Secret | `TAURI_SIGNING_PRIVATE_KEY` | `report-studio.key` 文件内容或路径 |
 | Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 生成密钥时设置的密码（没有则留空） |
 | Variable | `TAURI_UPDATER_PUBKEY` | `report-studio.key.pub` 文件内容 |
+| Variable | `PAGES_CUSTOM_DOMAIN` | 可选，Pages 自定义域名，例如 `oilu.cn/reportStudio`；默认 `oilu.cn/reportStudio` |
 
 注意：
 
@@ -189,7 +193,7 @@ plan
 
 build-app（仅应用版本变大时，x64 / ARM64 矩阵并行）
  ├─ 安装对应的 Rust target
- └─ 配置更新源 → tauri build --target <target> → 整理 ASCII 文件名 → 上传产物
+ └─ 配置 Pages + Release 更新源 → tauri build --target <target> → 整理 ASCII 文件名 → 上传产物
 
 pack-templates（仅模板版本变大时）
  └─ report-dev pack --only <变动的模板>
@@ -289,11 +293,19 @@ release
 2. 下载 Windows x64 / ARM64 两个应用安装包和全部最新模板
 3. 校验模板 sha256
 4. 生成 `docs/downloads/index.json`
-5. 部署到 GitHub Pages
+5. 生成改写为 Pages 地址的 `docs/downloads/latest.json`
+6. 部署到 GitHub Pages
+
+`latest.json` 中的 `platforms[*].url` 和 `templates[*].url` 会改写为 Pages 上的文件地址，
+`signature`、`sha256`、`size` 保持不变。应用自动更新和模板同步都会优先读取 Pages 清单，
+失败时回退到 GitHub Release 清单。
+
+注意：如果 Pages 返回 HTTP 200 但清单仍是旧版本，更新器会按“无更新”处理，不会继续
+尝试 GitHub；正常情况下 `pages` 工作流会在 Release 成功后立即重新部署。
 
 文档站使用本地 vendoring 的 Docsify + Vue 主题（不使用 CDN）。封面上的下载按钮会读取
-`downloads/index.json`，自动识别当前系统与架构；下拉菜单提供另一个 CPU 架构（例如
-x64 / ARM64 切换）和「更多版本」（指向 GitHub Releases）。
+`downloads/index.json`，自动识别当前系统与架构；下拉菜单固定提供 Windows x64 / Windows
+ARM64 和「更多版本」（指向 GitHub Releases），当前系统架构对应项带有「当前系统」徽标。
 
 完整说明见 [文档站部署](pages.md)。
 
@@ -420,9 +432,9 @@ node scripts/merge-latest.mjs \
 # 查看当前配置
 npm run updater:configure
 
-# 写入配置
+# 写入配置（按顺序尝试，第一个可用清单生效）
 npm run updater:configure -- `
-  --endpoint "https://github.com/<owner>/<repo>/releases/latest/download/latest.json" `
+  --endpoints "https://oilu.cn/reportStudio/downloads/latest.json,https://github.com/<owner>/<repo>/releases/latest/download/latest.json" `
   --pubkey-file "$HOME\.tauri\report-studio.key.pub"
 ```
 
@@ -430,7 +442,8 @@ npm run updater:configure -- `
 
 | 参数 | 说明 |
 | --- | --- |
-| `--endpoint` | 更新清单地址，必须为 HTTPS |
+| `--endpoints` | 逗号分隔的更新清单地址，按顺序尝试，必须为 HTTPS |
+| `--endpoint` | 单个更新清单地址，兼容旧用法 |
 | `--pubkey-file` | 公钥文件路径 |
 | `--pubkey` | 直接传公钥内容 |
 

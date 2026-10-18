@@ -99,7 +99,7 @@ impl Drop for SyncGuard<'_> {
     }
 }
 
-fn manifest_url(app: &AppHandle) -> Result<String, String> {
+fn manifest_urls(app: &AppHandle) -> Result<Vec<String>, String> {
     let plugins = &app.config().plugins.0;
     let updater = plugins
         .get("updater")
@@ -108,11 +108,15 @@ fn manifest_url(app: &AppHandle) -> Result<String, String> {
         .get("endpoints")
         .and_then(|value| value.as_array())
         .ok_or_else(|| "tauri.conf.json 缺少 updater.endpoints".to_string())?;
-    endpoints
-        .first()
-        .and_then(|value| value.as_str())
+    let urls = endpoints
+        .iter()
+        .filter_map(|value| value.as_str())
         .map(str::to_string)
-        .ok_or_else(|| "updater.endpoints 为空".to_string())
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        return Err("updater.endpoints 为空".to_string());
+    }
+    Ok(urls)
 }
 
 fn with_cache_bust(url: &str) -> String {
@@ -128,12 +132,15 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))
 }
 
-async fn fetch_manifest(app: &AppHandle) -> Result<LatestManifest, String> {
-    let url = with_cache_bust(&manifest_url(app)?);
-    let client = http_client()?;
+async fn fetch_manifest_from(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<LatestManifest, String> {
+    let url = with_cache_bust(url);
     let response = client
         .get(&url)
         .header("Accept", "application/json")
+        .timeout(Duration::from_secs(20))
         .send()
         .await
         .map_err(|e| format!("获取更新清单失败: {e}"))?;
@@ -144,6 +151,18 @@ async fn fetch_manifest(app: &AppHandle) -> Result<LatestManifest, String> {
         .json::<LatestManifest>()
         .await
         .map_err(|e| format!("解析更新清单失败: {e}"))
+}
+
+async fn fetch_manifest(app: &AppHandle) -> Result<LatestManifest, String> {
+    let client = http_client()?;
+    let mut errors = Vec::new();
+    for url in manifest_urls(app)? {
+        match fetch_manifest_from(&client, &url).await {
+            Ok(manifest) => return Ok(manifest),
+            Err(error) => errors.push(format!("{url}: {error}")),
+        }
+    }
+    Err(format!("获取更新清单失败：{}", errors.join("；")))
 }
 
 fn current_app_version(app: &AppHandle) -> Result<Version, String> {
