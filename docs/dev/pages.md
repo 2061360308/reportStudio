@@ -133,9 +133,13 @@ on:
 4. 生成改写为 Pages 地址的 `latest.json`
 5. 上传 `docs/` 为 Pages artifact
 6. 部署到 GitHub Pages
+7. 调用 `2061360308/edgeone-purge-action@v1` 刷新 EdgeOne 目录缓存
 
 下载步骤使用 `GITHUB_TOKEN` 访问 Release 资产，避免匿名请求限流。如果仓库还没有任何
 Release，工作流只部署 Docsify 文档，封面按钮回退到 Releases。
+
+EdgeOne 刷新使用 `purge_prefix`，目标为当前 Pages 根地址（`PAGES_BASE_URL`），默认
+`https://oilu.cn/reportStudio/`，默认 `method: invalidate`。
 
 ---
 
@@ -268,6 +272,16 @@ https://oilu.cn/reportStudio/
 | `PAGES_TOKEN` | PAT，需具备 `repo` 权限或 Pages write 权限 |
 
 未配置 `PAGES_TOKEN` 时，必须手动把 Pages Source 设为 **GitHub Actions**。
+
+EdgeOne 缓存刷新需要在 **Settings → Secrets and variables → Actions** 中配置：
+
+| 类型 | 名称 | 说明 |
+| --- | --- | --- |
+| Variable | `TENCENT_SECRET_ID` | 腾讯云 SecretId |
+| Secret | `TENCENT_SECRET_KEY` | 腾讯云 SecretKey |
+| Variable | `EDGEONE_ZONE_ID` | EdgeOne 站点 ID |
+
+刷新目标由工作流中的 `PAGES_BASE_URL` 决定，目录刷新类型为 `purge_prefix`。
 
 ---
 

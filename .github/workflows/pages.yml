@@ -55,6 +55,7 @@ jobs:
           fi
 
       - name: 下载最新应用与模板
+        id: prepare_downloads
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PAGES_CUSTOM_DOMAIN: ${{ vars.PAGES_CUSTOM_DOMAIN }}
@@ -65,6 +66,7 @@ jobs:
             *) PAGES_BASE_URL="https://$PAGES_BASE_URL" ;;
           esac
           PAGES_BASE_URL="${PAGES_BASE_URL%/}/"
+          echo "pages_base_url=$PAGES_BASE_URL" >> "$GITHUB_OUTPUT"
           node scripts/prepare-pages-downloads.mjs \
             --latest .release/latest.json \
             --docs docs \
@@ -84,3 +86,13 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: 刷新 EdgeOne 缓存
+        uses: 2061360308/edgeone-purge-action@v1
+        with:
+          secret_id: ${{ vars.TENCENT_SECRET_ID }}
+          secret_key: ${{ secrets.TENCENT_SECRET_KEY }}
+          zone_id: ${{ vars.EDGEONE_ZONE_ID }}
+          type: purge_prefix
+          paths: ${{ steps.prepare_downloads.outputs.pages_base_url }}
+          method: invalidate

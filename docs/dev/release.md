@@ -295,6 +295,7 @@ release
 4. 生成 `docs/downloads/index.json`
 5. 生成改写为 Pages 地址的 `docs/downloads/latest.json`
 6. 部署到 GitHub Pages
+7. 调用 EdgeOne Purge Action 刷新 Pages 根目录缓存
 
 `latest.json` 中的 `platforms[*].url` 和 `templates[*].url` 会改写为 Pages 上的文件地址，
 `signature`、`sha256`、`size` 保持不变。应用自动更新和模板同步都会优先读取 Pages 清单，
