@@ -702,6 +702,7 @@ mod tests {
             version: "1".into(),
             content_hash: String::new(),
             name: "t".into(),
+            min_app_version: None,
             assets_path: None,
             pages_path: None,
             variables: vec![],

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "contentHash": "",
   "name": "竣工结算审核报告",
+  "minAppVersion": "0.1.0",
   "variables": [
     {
       "key": "project_name",
@@ -151,7 +152,13 @@
       "key": "business_license",
       "alias": "营业执照",
       "type": "image",
-      "accept": ["png", "jpg", "jpeg", "bmp", "webp"],
+      "accept": [
+        "png",
+        "jpg",
+        "jpeg",
+        "bmp",
+        "webp"
+      ],
       "default": "assets/image8.png"
     }
   ],

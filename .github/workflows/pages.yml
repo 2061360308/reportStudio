@@ -1,0 +1,73 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'scripts/prepare-pages-downloads.mjs'
+      - '.github/workflows/pages.yml'
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: 拉取 latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p .release
+          if gh release view --json tagName >/dev/null 2>&1; then
+            for i in $(seq 1 10); do
+              if gh release download --pattern latest.json --dir .release --clobber; then
+                break
+              fi
+              sleep 3
+            done
+            test -f .release/latest.json || { echo "latest.json 下载失败"; exit 1; }
+          else
+            echo "暂无 Release，封面下载按钮将回退到 Releases"
+          fi
+
+      - name: 下载最新应用与模板
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/prepare-pages-downloads.mjs \
+            --latest .release/latest.json \
+            --docs docs \
+            --repo "${{ github.repository }}"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

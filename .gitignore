@@ -4,6 +4,9 @@ node_modules
 /build
 /.svelte-kit
 /package
+/release-plan.json
+/release-notes.md
+/docs/downloads/
 .env
 .env.*
 !.env.example

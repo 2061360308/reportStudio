@@ -1,6 +1,6 @@
 {
   "name": "report-studio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "工程报告生成工具",
   "type": "module",
   "scripts": {
@@ -9,13 +9,20 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
-    "dev:template": "cargo build --manifest-path src-tauri/Cargo.toml -p report-dev && src-tauri\\target\\debug\\report-dev.exe"
+    "dev:template": "cargo build --manifest-path src-tauri/Cargo.toml -p report-dev && src-tauri\\target\\debug\\report-dev.exe",
+    "version:set": "node scripts/set-version.mjs",
+    "version:check": "node scripts/check-versions.mjs",
+    "release:plan": "node scripts/check-versions.mjs",
+    "release:merge": "node scripts/merge-latest.mjs",
+    "updater:configure": "node scripts/configure-updater.mjs"
   },
   "license": "MIT",
   "dependencies": {
     "@lucide/svelte": "^1.57.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.0",
     "bits-ui": "^2.19.5",
     "clsx": "^2.1.1",
     "handsontable": "^14.6.1",

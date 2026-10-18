@@ -60,6 +60,7 @@ export interface TemplateManifest {
   version: string;
   contentHash: string;
   name: string;
+  minAppVersion?: string;
   assetsPath?: string;
   pagesPath?: string;
   variables: VariableDef[];
@@ -91,6 +92,25 @@ export interface TemplateInfo {
   version: string;
   name: string;
   contentHash: string;
+}
+
+export interface TemplateUpdateInfo {
+  id: string;
+  name: string;
+  version: string;
+  currentVersion?: string | null;
+  notes: string;
+  size?: number | null;
+  minAppVersion?: string | null;
+}
+
+export interface TemplateSyncEvent {
+  phase: "start" | "downloading" | "installing" | "installed" | "done";
+  id?: string;
+  current: number;
+  total: number;
+  percent?: number;
+  message?: string;
 }
 
 export interface TemplateRef {

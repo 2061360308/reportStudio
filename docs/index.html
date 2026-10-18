@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="报告工坊：桌面端工程报告模板编辑与输出工具，支持模板化编辑、实时预览与 PDF 导出。" />
+    <title>报告工坊 · 文档与下载</title>
+    <link rel="icon" href="assets/icon.ico" type="image/x-icon" />
+    <link rel="stylesheet" href="vendor/docsify/vue.css" />
+    <link rel="stylesheet" href="assets/cover.css" />
+  </head>
+  <body>
+    <div id="app">正在加载文档…</div>
+
+    <script>
+      window.$docsify = {
+        name: "报告工坊",
+        repo: "2061360308/reportStudio",
+        coverpage: true,
+        loadSidebar: true,
+        subMaxLevel: 2,
+        auto2top: true,
+        search: {
+          placeholder: "搜索文档…",
+          noData: "没有找到相关内容",
+          paths: "auto",
+          depth: 3,
+        },
+        plugins: [
+          function (hook) {
+            hook.doneEach(function () {
+              if (window.ReportStudioDownload) {
+                window.ReportStudioDownload.mount();
+              }
+            });
+          },
+        ],
+      };
+    </script>
+
+    <script src="vendor/docsify/docsify.min.js"></script>
+    <script src="vendor/docsify/search.min.js"></script>
+    <script src="assets/cover-download.js"></script>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 mod commands;
 mod pdf;
+mod template_sync;
 
 use report_core::{render, templates};
 use std::collections::HashMap;
@@ -7,34 +8,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::Manager;
-
-/// 程序目录（exe 所在的 `templates` 子目录）；取不到时退回系统临时目录。
-fn program_templates_dir(app: &tauri::AppHandle) -> PathBuf {
-    if let Ok(dir) = app.path().resource_dir() {
-        return dir.join("templates");
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            return parent.join("templates");
-        }
-    }
-    std::env::temp_dir().join("templates")
-}
-
-/// 目录是否可写（用于只读安装目录的兜底）。
-fn is_writable(dir: &Path) -> bool {
-    if fs::create_dir_all(dir).is_err() {
-        return false;
-    }
-    let probe = dir.join(format!(".write-test-{}", std::process::id()));
-    match fs::write(&probe, b"") {
-        Ok(_) => {
-            let _ = fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
-}
 
 fn copy_dir_all(src: &Path, dest: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dest)?;
@@ -51,31 +24,171 @@ fn copy_dir_all(src: &Path, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 将旧 `%APPDATA%/.../templates` 下的模板迁移到新目录（不覆盖已存在的）。
+/// 先复制到临时目录，再原子改名，避免中途失败留下不完整的目标目录。
+fn copy_dir_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(".copy-{}", uuid::Uuid::new_v4()));
+    let result = copy_dir_all(src, &tmp).and_then(|_| fs::rename(&tmp, dest));
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&tmp);
+    }
+    result
+}
+
+/// 将旧安装目录下的模板迁移到数据目录；迁移成功后清理旧副本。
 fn migrate_templates(old: &Path, new: &Path) {
+    if old == new {
+        return;
+    }
     let Ok(rd) = fs::read_dir(old) else {
         return;
     };
+
+    let mut all_ok = true;
     for entry in rd.flatten() {
         let src = entry.path();
         if !src.is_dir() {
             continue;
         }
         let dest = new.join(entry.file_name());
+
         if dest.exists() {
+            // 数据目录已有同名模板，旧安装目录副本不再需要。
+            match fs::remove_dir_all(&src) {
+                Ok(_) => eprintln!("已清理旧模板副本 {}", src.display()),
+                Err(e) => {
+                    all_ok = false;
+                    eprintln!("清理旧模板 {} 失败: {e}", src.display());
+                }
+            }
             continue;
         }
-        match copy_dir_all(&src, &dest) {
-            Ok(_) => eprintln!("已迁移模板 {} → {}", src.display(), dest.display()),
-            Err(e) => eprintln!("迁移模板 {} 失败: {e}", src.display()),
+
+        match copy_dir_atomic(&src, &dest) {
+            Ok(_) => {
+                eprintln!("已迁移模板 {} → {}", src.display(), dest.display());
+                match fs::remove_dir_all(&src) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        all_ok = false;
+                        eprintln!("清理旧模板 {} 失败: {e}", src.display());
+                    }
+                }
+            }
+            Err(e) => {
+                all_ok = false;
+                eprintln!("迁移模板 {} 失败: {e}", src.display());
+            }
         }
     }
+
+    if all_ok {
+        let _ = fs::remove_dir(old);
+    }
+}
+
+/// 清理数据目录里上次异常退出遗留的内嵌模板临时目录。
+fn cleanup_embedded_temp(root: &Path) {
+    let Ok(rd) = fs::read_dir(root) else {
+        return;
+    };
+    for id_entry in rd.flatten() {
+        let id_path = id_entry.path();
+        if !id_path.is_dir() {
+            continue;
+        }
+        let Ok(rd) = fs::read_dir(&id_path) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(".tmp-") {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
+/// 将旧缓存目录中的内嵌模板快照迁移到数据目录。
+fn migrate_embedded_snapshots(old: &Path, new: &Path) {
+    if old == new {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(old) else {
+        return;
+    };
+
+    for entry in rd.flatten() {
+        let src = entry.path();
+        if !src.is_dir() {
+            continue;
+        }
+
+        // 旧版平铺缓存（<id>/manifest.json）没有内容寻址，直接清理。
+        if src.join("manifest.json").exists() {
+            let _ = fs::remove_dir_all(&src);
+            continue;
+        }
+
+        let dest = new.join(entry.file_name());
+        if let Err(e) = fs::create_dir_all(&dest) {
+            eprintln!("创建内嵌模板数据目录 {} 失败: {e}", dest.display());
+            continue;
+        }
+
+        let Ok(rd) = fs::read_dir(&src) else {
+            continue;
+        };
+        let mut all_ok = true;
+
+        for hash_entry in rd.flatten() {
+            let hash_src = hash_entry.path();
+            if !hash_src.is_dir() {
+                continue;
+            }
+
+            let name = hash_entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(".tmp-") {
+                let _ = fs::remove_dir_all(&hash_src);
+                continue;
+            }
+
+            let hash_dest = dest.join(hash_entry.file_name());
+            if hash_dest.exists() {
+                let _ = fs::remove_dir_all(&hash_src);
+                continue;
+            }
+
+            match copy_dir_atomic(&hash_src, &hash_dest) {
+                Ok(_) => {
+                    eprintln!(
+                        "已迁移内嵌模板快照 {} → {}",
+                        hash_src.display(),
+                        hash_dest.display()
+                    );
+                    let _ = fs::remove_dir_all(&hash_src);
+                }
+                Err(e) => {
+                    all_ok = false;
+                    eprintln!("迁移内嵌模板快照 {} 失败: {e}", hash_src.display());
+                }
+            }
+        }
+
+        if all_ok {
+            let _ = fs::remove_dir_all(&src);
+        }
+    }
+
+    let _ = fs::remove_dir(old);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .register_uri_scheme_protocol("report", |ctx, req| {
             let not_found = || {
                 tauri::http::Response::builder()
@@ -161,48 +274,37 @@ pub fn run() {
                 .app_cache_dir()
                 .unwrap_or_else(|_| std::env::temp_dir().join("report-studio-cache"));
 
-            // 模板目录：开发时用仓库 `src-tauri/templates`（稳定，不随 cargo clean 丢失），
-            // 发布时用程序目录（exe 同级的 `templates`）。
-            let mut templates_dir = if cfg!(debug_assertions) {
+            // 模板目录：开发时用仓库 `src-tauri/templates`；
+            // 发布版只使用可写的应用数据目录，模板由远端同步命令安装。
+            let templates_dir = if cfg!(debug_assertions) {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")
             } else {
-                program_templates_dir(app.handle())
+                data.join("templates")
             };
 
-            // 程序目录可能只读（如 Program Files 机器级安装）→ 回退到应用数据目录。
-            if !is_writable(&templates_dir) {
-                let fallback = data.join("templates");
-                eprintln!(
-                    "模板目录 {} 不可写，回退到 {}",
-                    templates_dir.display(),
-                    fallback.display()
-                );
-                templates_dir = fallback;
-            }
-
             let renders_dir = cache.join("renders");
+            let embedded_templates_dir = data.join("embedded-templates");
             fs::create_dir_all(&templates_dir).ok();
             fs::create_dir_all(&renders_dir).ok();
+            fs::create_dir_all(&embedded_templates_dir).ok();
+            eprintln!("模板目录: {}", templates_dir.display());
+            eprintln!("内嵌模板目录: {}", embedded_templates_dir.display());
+            cleanup_embedded_temp(&embedded_templates_dir);
 
-            // 清理旧版内嵌模板缓存（旧的平铺布局 `<id>/manifest.json`）；
-            // 新版为内容寻址 `<id>/<hash>/`，不会命中这里。
-            let embedded = renders_dir.join("embedded");
-            if let Ok(rd) = fs::read_dir(&embedded) {
-                for entry in rd.flatten() {
-                    let p = entry.path();
-                    if p.is_dir() && p.join("manifest.json").exists() {
-                        let _ = fs::remove_dir_all(&p);
-                        eprintln!("已清理旧版内嵌模板缓存: {}", p.display());
-                    }
-                }
-            }
+            // 内嵌模板快照从旧缓存目录迁移到数据目录；旧版平铺缓存直接清理。
+            migrate_embedded_snapshots(
+                &renders_dir.join("embedded"),
+                &embedded_templates_dir,
+            );
 
-            // 发布版：把旧的 %APPDATA% 模板迁移到程序目录（已存在的跳过）。
-            // 开发版不迁移，避免把用户目录的模板写进仓库源码目录。
+            // 发布版升级：把旧安装目录中的模板一次性迁移到应用数据目录（不覆盖已有）。
+            // 新版安装包不再携带模板，但旧版本的模板仍可能留在安装目录里。
             if !cfg!(debug_assertions) {
-                let legacy = data.join("templates");
-                if legacy != templates_dir {
-                    migrate_templates(&legacy, &templates_dir);
+                if let Ok(resource) = app.path().resource_dir() {
+                    let legacy = resource.join("templates");
+                    if legacy.exists() && legacy != templates_dir {
+                        migrate_templates(&legacy, &templates_dir);
+                    }
                 }
             }
 
@@ -215,7 +317,9 @@ pub fn run() {
             app.manage(commands::AppPaths {
                 templates_dir,
                 renders_dir,
+                embedded_templates_dir,
                 mounts: Mutex::new(HashMap::new()),
+                template_sync: std::sync::atomic::AtomicBool::new(false),
             });
 
             // 无头自检：RS_SELFTEST=1 时，启动后自动走一遍"渲染 + 进程内 PrintToPdf"。
@@ -248,6 +352,8 @@ pub fn run() {
             commands::print_report,
             commands::save_project,
             commands::open_project,
+            template_sync::check_template_updates,
+            template_sync::sync_templates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -316,6 +422,7 @@ fn self_test(handle: &tauri::AppHandle) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -422,6 +529,85 @@ mod tests {
         );
         // 不应残留未替换的占位符
         assert!(!html.contains("{{"));
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rs-{tag}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn migrate_templates_moves_and_cleans_old_copy() {
+        let root = temp_dir("migrate-templates");
+        let old = root.join("install/templates");
+        let new = root.join("data/templates");
+        fs::create_dir_all(old.join("tpl-a")).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("tpl-a/manifest.json"), "{}").unwrap();
+
+        super::migrate_templates(&old, &new);
+
+        assert!(new.join("tpl-a/manifest.json").exists());
+        assert!(!old.join("tpl-a").exists());
+        assert!(!old.exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrate_templates_removes_old_copy_when_destination_exists() {
+        let root = temp_dir("migrate-templates-existing");
+        let old = root.join("install/templates");
+        let new = root.join("data/templates");
+        fs::create_dir_all(old.join("tpl-a")).unwrap();
+        fs::create_dir_all(new.join("tpl-a")).unwrap();
+        fs::write(old.join("tpl-a/manifest.json"), "old").unwrap();
+        fs::write(new.join("tpl-a/manifest.json"), "new").unwrap();
+
+        super::migrate_templates(&old, &new);
+
+        assert_eq!(
+            fs::read_to_string(new.join("tpl-a/manifest.json")).unwrap(),
+            "new"
+        );
+        assert!(!old.exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrate_embedded_snapshots_moves_to_data_and_cleans_cache() {
+        let root = temp_dir("migrate-embedded");
+        let old = root.join("cache/renders/embedded");
+        let new = root.join("data/embedded-templates");
+        fs::create_dir_all(old.join("tpl-a/hash1")).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("tpl-a/hash1/manifest.json"), "{}").unwrap();
+
+        super::migrate_embedded_snapshots(&old, &new);
+
+        assert!(new.join("tpl-a/hash1/manifest.json").exists());
+        assert!(!old.exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn migrate_embedded_snapshots_drops_legacy_flat_cache() {
+        let root = temp_dir("migrate-embedded-flat");
+        let old = root.join("cache/renders/embedded");
+        let new = root.join("data/embedded-templates");
+        fs::create_dir_all(old.join("tpl-a")).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("tpl-a/manifest.json"), "{}").unwrap();
+
+        super::migrate_embedded_snapshots(&old, &new);
+
+        assert!(!old.exists());
+        assert!(!new.join("tpl-a").exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

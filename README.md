@@ -5,6 +5,8 @@
 管理员编写/导入报告模板，普通用户填写变量后实时预览、导出 PDF 或打印。渲染逻辑
 与桌面外壳解耦，可独立复用与调试。
 
+在线文档与下载：<https://2061360308.github.io/reportStudio/>
+
 ## 目录结构
 
 ```
@@ -18,7 +20,7 @@ report-studio/
 │  ├─ crates/
 │  │  ├─ report-core/          # 纯渲染库（模型 / 渲染 / 模板管理），不依赖 Tauri
 │  │  └─ report-dev/           # 模板开发服务器（仅开发期使用，不打包）
-│  └─ templates/               # 内置模板（随应用打包为资源）
+│  └─ templates/               # 模板源文件（不随安装包发布，由发布工作流单独分发）
 └─ package.json
 ```
 
@@ -34,7 +36,8 @@ npm install
 npm run tauri dev      # 启动桌面应用（开发模式）
 ```
 
-模板目录（开发模式）位于 `src-tauri/templates/`，打包后从应用资源目录读取。
+开发模式直接读取 `src-tauri/templates/`。发布版安装包不再内置模板，首次启动会从
+`latest.json` 同步到应用数据目录（Windows 下为 `%APPDATA%/com.muban.reportstudio/templates`）。
 
 ### 模板开发服务器
 
@@ -115,8 +118,42 @@ npm run dev:template -- src-tauri/templates/settle-audit-report
 
 ```bash
 npm run build                 # 构建前端
-npm run tauri build           # 构建安装包（MSI / NSIS）
+npm run tauri build           # 构建安装包（NSIS）
 ```
+
+## 发版
+
+应用版本以根目录 `VERSION` 为准，模板版本以各模板 `manifest.json` 的 `version` 为准。
+
+```bash
+# 应用发版：同步版本号，并在 CHANGELOG.md 插入空的当前版本段落
+npm run version:set -- 0.1.1
+
+# 模板发版：更新模板版本，并在模板 CHANGELOG.md 插入空段落
+npm run version:set -- --template settle-audit-report 1.0.2
+```
+
+提交并推送到 `main` 后，`.github/workflows/release.yml` 会比较上一轮 `latest.json`：
+
+- `VERSION` 变大 → 构建应用
+- 某个模板版本变大 → 只打包该模板
+- 新模板 → 直接打包
+- 未变化资源 → 沿用上一轮 Release 的地址
+- 版本号回退或与 `tauri.conf.json` / `package.json` / `Cargo.toml` 不一致 → CI 失败
+
+首次配置更新源：
+
+```bash
+npm run tauri signer generate -- -w $HOME/.tauri/report-studio.key
+npm run updater:configure -- \
+  --endpoint https://github.com/<owner>/<repo>/releases/latest/download/latest.json \
+  --pubkey-file $HOME/.tauri/report-studio.key.pub
+```
+
+CI 需要配置 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+两个 Secret。更新源要求仓库或 Release 仓库公开可读。
+
+完整说明见 [docs/dev/release.md](docs/dev/release.md)。
 
 ## 许可证
 

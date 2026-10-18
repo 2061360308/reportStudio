@@ -1,13 +1,31 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { getVersion } from "@tauri-apps/api/app";
+  import type { Update } from "@tauri-apps/plugin-updater";
   import * as api from "$lib/api";
   import * as Menubar from "$lib/components/elements/menubar";
   import Start from "$lib/Start.svelte";
   import Editor from "$lib/Editor.svelte";
   import Preview from "$lib/Preview.svelte";
   import NewProjectDialog from "$lib/NewProjectDialog.svelte";
-  import type { OpenedProject, RecentItem } from "$lib/types";
+  import UpdateDialog from "$lib/UpdateDialog.svelte";
+  import TemplateUpdateDialog from "$lib/TemplateUpdateDialog.svelte";
+  import TemplateSyncOverlay from "$lib/TemplateSyncOverlay.svelte";
+  import {
+    checkAppUpdate,
+    installAppUpdate,
+    isTauriRuntime,
+    skipVersion,
+  } from "$lib/updater";
+  import { findTemplateUpdates, syncAllTemplates } from "$lib/templateSync";
+  import type {
+    OpenedProject,
+    RecentItem,
+    TemplateInfo,
+    TemplateSyncEvent,
+    TemplateUpdateInfo,
+  } from "$lib/types";
 
   const RECENT_KEY = "report-studio:recent";
 
@@ -17,16 +35,40 @@
   let recent = $state<RecentItem[]>([]);
   let showNew = $state(false);
   let refreshKey = $state(0);
+  let templatesRefreshKey = $state(0);
   let toast = $state("");
   let focusReq = $state<{ key: string; n: number } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let appVersion = $state("");
+  let appUpdate = $state<Update | null>(null);
+  let appInstalling = $state(false);
+  let appPercent = $state(0);
+  let appError = $state("");
+
+  let templateUpdates = $state<TemplateUpdateInfo[]>([]);
+  let showTemplateUpdates = $state(false);
+  let templateSyncing = $state(false);
+  let templatePercent = $state(0);
+  let templateError = $state("");
+  let templateMessage = $state("");
+  let showFirstRunSync = $state(false);
 
   function editField(key: string) {
     focusReq = { key, n: (focusReq?.n ?? 0) + 1 };
     tab = "vars";
   }
 
-  onMount(loadRecent);
+  onMount(() => {
+    loadRecent();
+    if (isTauriRuntime()) {
+      getVersion()
+        .then((version) => (appVersion = version))
+        .catch(() => {});
+    }
+    const timer = setTimeout(runStartupChecks, 3000);
+    return () => clearTimeout(timer);
+  });
 
   function loadRecent() {
     try {
@@ -49,6 +91,138 @@
     toast = msg;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (toast = ""), 3200);
+  }
+
+  /* ---------------- 更新 ---------------- */
+  async function runStartupChecks() {
+    if (!import.meta.env.PROD || !isTauriRuntime()) return;
+
+    let templates: TemplateInfo[] = [];
+    try {
+      templates = await api.listTemplates();
+    } catch {
+      templates = [];
+    }
+
+    if (templates.length === 0) {
+      showFirstRunSync = true;
+      await syncTemplatesNow(true);
+    }
+
+    await checkForAppUpdate(false);
+
+    // 应用更新优先；避免两个更新弹窗同时出现，模板更新留到下次启动。
+    if (appUpdate) return;
+
+    if (templates.length > 0) {
+      try {
+        const updates = await findTemplateUpdates();
+        if (updates.length) {
+          templateUpdates = updates;
+          showTemplateUpdates = true;
+        }
+      } catch {
+        // 静默检查失败不打扰用户
+      }
+    }
+  }
+
+  async function syncTemplatesNow(firstRun: boolean) {
+    if (templateSyncing) return;
+    templateSyncing = true;
+    templatePercent = 0;
+    templateError = "";
+    templateMessage = "正在同步模板…";
+
+    try {
+      await syncAllTemplates((event: TemplateSyncEvent) => {
+        const unit = event.total ? (event.current + (event.percent ?? 0) / 100) / event.total : 0;
+        templatePercent = Math.max(0, Math.min(100, Math.round(unit * 100)));
+        if (event.message) templateMessage = event.message;
+        if (event.phase === "installed" && event.id) {
+          templateMessage = `已安装 ${event.id}`;
+        }
+      });
+      templatesRefreshKey += 1;
+      showFirstRunSync = false;
+      showTemplateUpdates = false;
+      templateUpdates = [];
+      toastMsg(firstRun ? "模板准备完成" : "模板已更新");
+    } catch (e) {
+      templateError = String(e);
+      if (!firstRun) toastMsg(`模板更新失败：${e}`);
+    } finally {
+      templateSyncing = false;
+    }
+  }
+
+  async function checkForAppUpdate(manual: boolean) {
+    try {
+      const update = await checkAppUpdate(manual);
+      if (update) {
+        appUpdate = update;
+        appError = "";
+      } else if (manual) {
+        toastMsg("应用已是最新版本");
+      }
+    } catch (e) {
+      if (manual) toastMsg(`检查更新失败：${e}`);
+    }
+  }
+
+  async function manualCheckAll() {
+    const messages: string[] = [];
+    let appFound = false;
+
+    try {
+      const update = await checkAppUpdate(true);
+      if (update) {
+        appUpdate = update;
+        appFound = true;
+      } else {
+        messages.push("应用已是最新");
+      }
+    } catch (e) {
+      messages.push(`应用检查失败：${e}`);
+    }
+
+    try {
+      const updates = await findTemplateUpdates();
+      if (updates.length && !appFound) {
+        templateUpdates = updates;
+        showTemplateUpdates = true;
+      } else if (updates.length) {
+        messages.push(`${updates.length} 个模板更新将在应用更新后同步`);
+      } else {
+        messages.push("模板已是最新");
+      }
+    } catch (e) {
+      messages.push(`模板检查失败：${e}`);
+    }
+
+    if (messages.length) toastMsg(messages.join("；"));
+  }
+
+  async function installUpdate() {
+    if (!appUpdate || appInstalling) return;
+    appInstalling = true;
+    appError = "";
+    appPercent = 0;
+    try {
+      await installAppUpdate(appUpdate, (progress) => {
+        appPercent = progress.percent;
+      });
+    } catch (e) {
+      appError = String(e);
+      appInstalling = false;
+    }
+  }
+
+  function skipAppUpdate() {
+    if (!appUpdate) return;
+    skipVersion(appUpdate.version);
+    appUpdate = null;
+    appInstalling = false;
   }
 
   /* ---------------- 文件 ---------------- */
@@ -95,6 +269,7 @@
     if (typeof path !== "string") return;
     try {
       const t = await api.installTemplate(path);
+      templatesRefreshKey += 1;
       toastMsg(`已载入模板：${t.name}`);
     } catch (e) {
       toastMsg(String(e));
@@ -287,7 +462,11 @@
       <Menubar.Menu>
         <Menubar.Trigger>帮助</Menubar.Trigger>
         <Menubar.Content>
-          <Menubar.Item onSelect={() => toastMsg("报告工坊 v0.1.0")}>
+          <Menubar.Item onSelect={manualCheckAll}>检查更新</Menubar.Item>
+          <Menubar.Separator />
+          <Menubar.Item
+            onSelect={() => toastMsg(appVersion ? `报告工坊 v${appVersion}` : "报告工坊")}
+          >
             关于报告工坊
           </Menubar.Item>
         </Menubar.Content>
@@ -335,7 +514,47 @@
   {/if}
 
   {#if showNew}
-    <NewProjectDialog oncreated={onCreated} oncancel={() => (showNew = false)} />
+    {#key templatesRefreshKey}
+      <NewProjectDialog
+        oncreated={onCreated}
+        oncancel={() => (showNew = false)}
+        onsync={() => syncTemplatesNow(false)}
+      />
+    {/key}
+  {/if}
+
+  {#if appUpdate}
+    <UpdateDialog
+      version={appUpdate.version}
+      notes={appUpdate.body ?? ""}
+      installing={appInstalling}
+      percent={appPercent}
+      error={appError}
+      oninstall={installUpdate}
+      onlater={() => (appUpdate = null)}
+      onskip={skipAppUpdate}
+    />
+  {/if}
+
+  {#if showTemplateUpdates && !showFirstRunSync}
+    <TemplateUpdateDialog
+      updates={templateUpdates}
+      busy={templateSyncing}
+      progress={templatePercent}
+      error={templateError}
+      onupdate={() => syncTemplatesNow(false)}
+      onlater={() => (showTemplateUpdates = false)}
+    />
+  {/if}
+
+  {#if showFirstRunSync}
+    <TemplateSyncOverlay
+      percent={templatePercent}
+      message={templateMessage}
+      error={templateError}
+      onretry={() => syncTemplatesNow(true)}
+      onclose={() => (showFirstRunSync = false)}
+    />
   {/if}
 
   {#if toast}

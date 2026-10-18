@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Channel } from "@tauri-apps/api/core";
 import type {
   OpenedProject,
   PreviewPage,
   Project,
   TemplateInfo,
   TemplateManifest,
+  TemplateSyncEvent,
+  TemplateUpdateInfo,
 } from "./types";
 
 export const listTemplates = () => invoke<TemplateInfo[]>("list_templates");
@@ -58,3 +61,9 @@ export const saveProject = (
 
 export const openProject = (path: string) =>
   invoke<OpenedProject>("open_project", { path });
+
+export const checkTemplateUpdates = () =>
+  invoke<TemplateUpdateInfo[]>("check_template_updates");
+
+export const syncTemplates = (onEvent: Channel<TemplateSyncEvent>) =>
+  invoke<TemplateInfo[]>("sync_templates", { onEvent });

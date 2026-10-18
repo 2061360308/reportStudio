@@ -126,6 +126,9 @@ pub struct TemplateManifest {
     #[serde(default)]
     pub content_hash: String,
     pub name: String,
+    /// 远端分发时要求的最低应用版本；为空表示不限制。
+    #[serde(default)]
+    pub min_app_version: Option<String>,
     /// 资源目录（相对模板根），默认 "assets"
     #[serde(default)]
     pub assets_path: Option<String>,

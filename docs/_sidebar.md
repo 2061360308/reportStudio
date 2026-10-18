@@ -1,0 +1,5 @@
+- [首页](README.md)
+- 开发文档
+  - [发版与自动更新](dev/release.md)
+  - [文档站与下载按钮](dev/pages.md)
+- [GitHub Releases](https://github.com/2061360308/reportStudio/releases)

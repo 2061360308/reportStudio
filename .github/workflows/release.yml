@@ -1,0 +1,213 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      app_changed: ${{ steps.check.outputs.app_changed }}
+      app_version: ${{ steps.check.outputs.app_version }}
+      template_ids: ${{ steps.check.outputs.template_ids }}
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: 下载上一轮 latest.json
+        run: |
+          mkdir -p prev
+          gh release download --pattern latest.json --dir prev --clobber || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 计算发布计划
+        id: check
+        run: node scripts/check-versions.mjs --prev prev/latest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: |
+            release-plan.json
+            release-notes.md
+          if-no-files-found: error
+
+  build-app:
+    needs: plan
+    if: needs.plan.outputs.app_changed == 'true'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Rust 目标
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 配置更新源
+        shell: pwsh
+        env:
+          UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+        run: |
+          if (-not $env:UPDATER_PUBKEY) { throw "请在仓库 Variables 中配置 TAURI_UPDATER_PUBKEY" }
+          Set-Content -Path updater.pub -Value $env:UPDATER_PUBKEY -NoNewline
+          node scripts/configure-updater.mjs `
+            --endpoint "https://github.com/${{ github.repository }}/releases/latest/download/latest.json" `
+            --pubkey-file updater.pub
+
+      - name: 构建应用（${{ matrix.arch }}）
+        run: npm run tauri build -- --target ${{ matrix.target }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: 整理应用产物（ASCII 文件名）
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/app | Out-Null
+          $version = (Get-Content VERSION -Raw).Trim()
+          $bundle = "src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
+          $exe = Get-ChildItem "$bundle/*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "未找到 NSIS 安装包（${{ matrix.arch }}）" }
+          $target = "dist/app/report-studio_${version}_${{ matrix.arch }}-setup.exe"
+          Copy-Item $exe.FullName $target
+          Copy-Item "$($exe.FullName).sig" "${target}.sig"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.arch }}
+          path: dist/app/*
+          if-no-files-found: error
+
+  pack-templates:
+    needs: plan
+    if: needs.plan.outputs.template_ids != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: 打包变动模板
+        run: |
+          cargo run --manifest-path src-tauri/Cargo.toml -p report-dev -- \
+            pack --templates src-tauri/templates \
+            --only "${{ needs.plan.outputs.template_ids }}" \
+            --out dist/templates
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: templates
+          path: dist/templates/*
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build-app, pack-templates]
+    if: |
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.has_changes == 'true' &&
+      (needs.build-app.result == 'success' || needs.build-app.result == 'skipped') &&
+      (needs.pack-templates.result == 'success' || needs.pack-templates.result == 'skipped') &&
+      (needs.build-app.result != 'skipped' || needs.plan.outputs.app_changed != 'true') &&
+      (needs.pack-templates.result != 'skipped' || needs.plan.outputs.template_ids == '')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: release-${{ github.run_number }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载发布计划
+        uses: actions/download-artifact@v4
+        with:
+          name: plan
+          path: dist
+
+      - name: 下载上一轮 latest.json
+        run: |
+          mkdir -p prev
+          gh release download --pattern latest.json --dir prev --clobber || true
+
+      - name: 下载应用产物
+        if: needs.plan.outputs.app_changed == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: app-*
+          path: dist
+          merge-multiple: true
+
+      - name: 下载模板产物
+        if: needs.plan.outputs.template_ids != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: templates
+          path: dist/templates
+
+      - name: 合并 latest.json
+        run: |
+          node scripts/merge-latest.mjs \
+            --prev prev/latest.json \
+            --plan dist/release-plan.json \
+            --dist dist \
+            --out dist/latest.json \
+            --tag "$RELEASE_TAG" \
+            --repo "${{ github.repository }}"
+
+      - name: 创建 Draft Release
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --title "报告工坊 v${{ needs.plan.outputs.app_version }}" \
+            --notes-file dist/release-notes.md
+
+      - name: 上传资源
+        run: |
+          mapfile -t assets < <(find dist -type f \( -name '*.exe' -o -name '*.exe.sig' -o -name '*.zip' \) -print)
+          if (( ${#assets[@]} )); then
+            gh release upload "$RELEASE_TAG" "${assets[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" dist/latest.json
+
+      - name: 发布为 latest
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest

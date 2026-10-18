@@ -1,0 +1,24 @@
+html,body{margin:0;padding:0;background:#fff;font-family:"宋体","SimSun",serif;font-size:10pt;color:#000;}
+.paper{position:relative;background:#fff;margin:0 auto;box-sizing:border-box;width:var(--a4w);height:var(--a4h);padding:var(--mt) var(--mr) var(--mb) var(--ml);}
+.page{position:relative;overflow:hidden;width:100%;height:100%;}
+.page p{margin:0;}
+.title{text-align:center;font-weight:700;font-size:16pt;margin:0 0 10mm;}
+table.doc-tbl{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10pt;}
+table.doc-tbl td{border:1px solid #000;padding:1.2mm 1mm;vertical-align:middle;text-align:center;word-break:break-all;line-height:1.4;}
+table.doc-tbl td.vt{writing-mode:vertical-rl;text-orientation:upright;letter-spacing:2px;padding:1.2mm 0;}
+table.doc-tbl td.sig{text-align:left;}
+/* 审核意见签章：上方垂直居中+水平两端对齐，日期贴底居中 */
+table.doc-tbl td.sigcell{position:relative;padding:0;vertical-align:top;}
+table.doc-tbl td.sigcell>.sigwrap{position:absolute;inset:0;box-sizing:border-box;padding:2mm 3mm;display:flex;flex-direction:column;}
+table.doc-tbl td.sigcell .sigtop{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:space-between;}
+table.doc-tbl td.sigcell .sigdate{flex:none;text-align:center;}
+/* 验收意见值格：上=合格水平居中，下=验收日期靠右 */
+table.doc-tbl td.accell{position:relative;padding:0;vertical-align:top;}
+table.doc-tbl td.accell>.acwrap{position:absolute;inset:0;box-sizing:border-box;padding:2mm 3mm;display:flex;flex-direction:column;}
+table.doc-tbl td.accell .actop{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;}
+table.doc-tbl td.accell .acbot{flex:none;text-align:right;}
+@media print{
+  html,body{background:#fff;}
+  .paper{margin:0;box-shadow:none;page-break-after:always;}
+  .paper:last-child{page-break-after:auto;}
+}

@@ -25,7 +25,11 @@ pub struct Mount {
 pub struct AppPaths {
     pub templates_dir: PathBuf,
     pub renders_dir: PathBuf,
+    /// 工程内嵌模板快照（数据目录，避免依赖安装目录或缓存目录）。
+    pub embedded_templates_dir: PathBuf,
     pub mounts: Mutex<HashMap<String, Mount>>,
+    /// 模板同步/安装串行锁，避免并发覆盖同一目录。
+    pub template_sync: std::sync::atomic::AtomicBool,
 }
 
 fn now() -> String {
@@ -404,8 +408,7 @@ pub fn open_project(state: State<AppPaths>, path: String) -> Result<OpenedProjec
 
     let tdir = if has_embedded {
         let base = state
-            .renders_dir
-            .join("embedded")
+            .embedded_templates_dir
             .join(templates::sanitize_id(&project.template_ref.id));
         fs::create_dir_all(&base).map_err(|e| e.to_string())?;
 

@@ -7,15 +7,18 @@
   let {
     oncreated,
     oncancel,
+    onsync,
   }: {
     oncreated: (o: OpenedProject, path: string) => void;
     oncancel: () => void;
+    onsync?: () => Promise<void>;
   } = $props();
 
   let templates = $state<TemplateInfo[]>([]);
   let selected = $state("");
   let savePath = $state("");
   let busy = $state(false);
+  let syncBusy = $state(false);
   let error = $state("");
 
   const chosen = $derived(templates.find((t) => t.id === selected) ?? null);
@@ -36,6 +39,20 @@
       if (templates.length && !selected) selected = templates[0].id;
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  async function retrySync() {
+    if (!onsync) return;
+    syncBusy = true;
+    error = "";
+    try {
+      await onsync();
+      // 同步成功后 App 会更新 templatesRefreshKey，弹窗重新挂载并加载列表。
+    } catch (e) {
+      error = String(e);
+    } finally {
+      syncBusy = false;
     }
   }
 
@@ -90,7 +107,14 @@
 
     <div class="body">
       {#if templates.length === 0}
-        <p class="hint">暂无已安装模板，请先在菜单「文件 › 载入新模板」安装。</p>
+        <p class="hint">
+          暂无已安装模板。首次使用需要从更新源同步模板。
+        </p>
+        {#if onsync}
+          <button class="sync-btn" onclick={retrySync} disabled={syncBusy}>
+            {syncBusy ? "正在同步…" : "同步模板"}
+          </button>
+        {/if}
       {:else}
         <ul class="tpl-list">
           {#each templates as t (t.id)}
@@ -271,6 +295,9 @@
     margin: 0;
     font-size: 13px;
     color: var(--placeholder);
+  }
+  .sync-btn {
+    margin-top: 12px;
   }
   .error {
     margin: 14px 0 0;

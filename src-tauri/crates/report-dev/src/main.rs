@@ -7,7 +7,9 @@
 use report_core::model::TemplateManifest;
 use report_core::render;
 use report_core::templates;
+use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -23,11 +25,17 @@ struct DevState {
 }
 
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("pack") {
+        run_pack(&argv[1..]);
+        return;
+    }
+
     let mut dir: Option<String> = None;
     let mut port: u16 = 1735;
     let mut values_file: Option<String> = None;
 
-    let mut args = std::env::args().skip(1);
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--port" | "-p" => {
@@ -101,6 +109,172 @@ fn main() {
             });
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackedTemplate {
+    id: String,
+    name: String,
+    version: String,
+    file: String,
+    sha256: String,
+    size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_app_version: Option<String>,
+}
+
+fn run_pack(args: &[String]) {
+    let mut templates_dir = PathBuf::from("templates");
+    let mut out_dir = PathBuf::from("dist/templates");
+    let mut only: Option<Vec<String>> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--templates" | "-t" => {
+                i += 1;
+                if i >= args.len() {
+                    pack_usage();
+                    std::process::exit(1);
+                }
+                templates_dir = PathBuf::from(&args[i]);
+            }
+            "--out" | "-o" => {
+                i += 1;
+                if i >= args.len() {
+                    pack_usage();
+                    std::process::exit(1);
+                }
+                out_dir = PathBuf::from(&args[i]);
+            }
+            "--only" => {
+                i += 1;
+                if i >= args.len() {
+                    pack_usage();
+                    std::process::exit(1);
+                }
+                only = Some(
+                    args[i]
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(ToString::to_string)
+                        .collect(),
+                );
+            }
+            "-h" | "--help" => {
+                pack_usage();
+                return;
+            }
+            other => {
+                eprintln!("未知参数：{other}");
+                pack_usage();
+                std::process::exit(1);
+            }
+        }
+        i += 1;
+    }
+
+    if !templates_dir.exists() {
+        eprintln!("模板目录不存在：{}", templates_dir.display());
+        std::process::exit(1);
+    }
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("创建输出目录失败：{e}");
+        std::process::exit(1);
+    }
+
+    let mut entries: Vec<(PathBuf, PackedTemplate)> = Vec::new();
+    let mut dirs: Vec<PathBuf> = match std::fs::read_dir(&templates_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.join("manifest.json").exists())
+            .collect(),
+        Err(e) => {
+            eprintln!("读取模板目录失败：{e}");
+            std::process::exit(1);
+        }
+    };
+    dirs.sort();
+
+    for dir in dirs {
+        let manifest = match templates::read_manifest(&dir) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("读取 {} 失败：{e}", dir.display());
+                std::process::exit(1);
+            }
+        };
+
+        if let Some(list) = &only {
+            if !list.iter().any(|id| id == &manifest.id) {
+                continue;
+            }
+        }
+
+        let id = templates::sanitize_id(&manifest.id);
+        let file_name = format!("{}-{}.zip", id, manifest.version);
+        let zip_path = out_dir.join(&file_name);
+        if let Err(e) = templates::export_template(&templates_dir, &manifest.id, &zip_path) {
+            eprintln!("打包模板 {} 失败：{e}", manifest.id);
+            std::process::exit(1);
+        }
+
+        let bytes = match std::fs::read(&zip_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("读取 {} 失败：{e}", zip_path.display());
+                std::process::exit(1);
+            }
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let sha256 = hex::encode(hasher.finalize());
+
+        entries.push((
+            zip_path,
+            PackedTemplate {
+                id: manifest.id.clone(),
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                file: file_name,
+                sha256,
+                size: bytes.len() as u64,
+                min_app_version: manifest.min_app_version.clone(),
+            },
+        ));
+    }
+
+    if let Some(list) = &only {
+        let found: Vec<&str> = entries.iter().map(|(_, e)| e.id.as_str()).collect();
+        for id in list {
+            if !found.iter().any(|x| *x == id.as_str()) {
+                eprintln!("未找到模板：{id}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    let metas: Vec<&PackedTemplate> = entries.iter().map(|(_, e)| e).collect();
+    let json = serde_json::to_string_pretty(&metas).expect("序列化打包结果失败");
+    let index_path = out_dir.join("packed.json");
+    if let Err(e) = std::fs::write(&index_path, format!("{json}\n")) {
+        eprintln!("写入 {} 失败：{e}", index_path.display());
+        std::process::exit(1);
+    }
+
+    for (_, entry) in &entries {
+        println!("已打包 {} v{} -> {}", entry.id, entry.version, entry.file);
+    }
+    println!("打包结果：{}", index_path.display());
+}
+
+fn pack_usage() {
+    eprintln!(
+        "打包模板\n\n用法:\n  report-dev pack --templates <模板根目录> --out <输出目录> [--only id1,id2]\n"
+    );
 }
 
 fn print_help() {
