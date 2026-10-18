@@ -90,9 +90,9 @@ jobs:
       - name: 刷新 EdgeOne 缓存
         uses: 2061360308/edgeone-purge-action@v1
         with:
-          secret_id: ${{ vars.TENCENT_SECRET_ID }}
+          secret_id: ${{ secrets.TENCENT_SECRET_ID }}
           secret_key: ${{ secrets.TENCENT_SECRET_KEY }}
-          zone_id: ${{ vars.EDGEONE_ZONE_ID }}
+          zone_id: ${{ secrets.EDGEONE_ZONE_ID }}
           type: purge_prefix
           paths: ${{ steps.prepare_downloads.outputs.pages_base_url }}
           method: invalidate

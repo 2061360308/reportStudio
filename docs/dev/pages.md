@@ -277,9 +277,9 @@ EdgeOne 缓存刷新需要在 **Settings → Secrets and variables → Actions**
 
 | 类型 | 名称 | 说明 |
 | --- | --- | --- |
-| Variable | `TENCENT_SECRET_ID` | 腾讯云 SecretId |
+| Secret | `TENCENT_SECRET_ID` | 腾讯云 SecretId |
 | Secret | `TENCENT_SECRET_KEY` | 腾讯云 SecretKey |
-| Variable | `EDGEONE_ZONE_ID` | EdgeOne 站点 ID |
+| Secret | `EDGEONE_ZONE_ID` | EdgeOne 站点 ID |
 
 刷新目标由工作流中的 `PAGES_BASE_URL` 决定，目录刷新类型为 `purge_prefix`。
 
