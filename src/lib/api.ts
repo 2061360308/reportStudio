@@ -18,6 +18,9 @@ export const getManifest = (templateId: string) =>
 export const newProject = (templateId: string) =>
   invoke<OpenedProject>("new_project", { templateId });
 
+export const projectFileExists = (path: string) =>
+  invoke<boolean>("project_file_exists", { path });
+
 export const renderPreview = (templateDir: string, values: unknown, projectId: string) =>
   invoke<PreviewPage[]>("render_preview", { templateDir, values, projectId });
 
@@ -57,7 +60,8 @@ export const saveProject = (
   project: Project,
   embedTemplate: boolean,
   projectId: string,
-) => invoke<void>("save_project", { path, project, embedTemplate, projectId });
+  overwrite = true,
+) => invoke<void>("save_project", { path, project, embedTemplate, projectId, overwrite });
 
 export const openProject = (path: string) =>
   invoke<OpenedProject>("open_project", { path });

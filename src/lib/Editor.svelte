@@ -11,12 +11,14 @@
     templateDir,
     projectId,
     focusReq,
+    onchange,
   }: {
     manifest: TemplateManifest;
     project: Project;
     templateDir: string;
     projectId: string;
     focusReq?: { key: string; n: number } | null;
+    onchange?: () => void;
   } = $props();
 
   let root = $state<HTMLDivElement | undefined>();
@@ -57,6 +59,7 @@
 
   function set(key: string, val: unknown) {
     project.values[key] = val;
+    onchange?.();
     refresh();
   }
 
@@ -90,9 +93,9 @@
       {#if v.type === "computed"}
         <div class="computed">{computedText(v.key, v.unit)}</div>
       {:else if v.type === "table"}
-        <TableEditor variable={v} {project} />
+        <TableEditor variable={v} {project} {onchange} />
       {:else if v.type === "image" || v.type === "images"}
-        <ImageEditor variable={v} {project} {projectId} />
+        <ImageEditor variable={v} {project} {projectId} {onchange} />
       {:else if v.type === "text"}
         <textarea
           rows="3"

@@ -6,7 +6,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-fn make_env(loader: Option<PathBuf>, samples: Option<Arc<HashSet<String>>>) -> Environment<'static> {
+fn make_env(
+    loader: Option<PathBuf>,
+    samples: Option<Arc<HashSet<String>>>,
+) -> Environment<'static> {
     let mut env = Environment::new();
     if let Some(dir) = loader {
         env.set_loader(minijinja::path_loader(dir));
@@ -42,30 +45,31 @@ fn make_env(loader: Option<PathBuf>, samples: Option<Arc<HashSet<String>>>) -> E
     env.add_filter("rmb_upper", |v: Option<f64>| -> String { rmb_upper(v) });
     // 字段标记：把变量出现处包成一个带 data-field 的 <span>（返回安全 HTML，绕过转义）。
     // 若该值来自 preview 占位（sample），额外加 rs-sample 标记（前端用橙色荧光笔）。
-    env.add_filter("field", move |value: MjValue, key: Option<String>| -> MjValue {
-        let key = key.unwrap_or_default();
-        let is_sample = samples
-            .as_ref()
-            .map_or(false, |s| s.contains(&key));
-        let text = if value.is_undefined() || value.is_none() {
-            String::new()
-        } else {
-            value.to_string()
-        };
-        let class = if is_sample {
-            "rs-field rs-sample"
-        } else {
-            "rs-field"
-        };
-        let sample_attr = if is_sample { " data-sample=\"1\"" } else { "" };
-        MjValue::from_safe_string(format!(
-            "<span class=\"{}\" data-field=\"{}\"{}>{}</span>",
-            class,
-            html_escape(&key),
-            sample_attr,
-            html_escape(&text)
-        ))
-    });
+    env.add_filter(
+        "field",
+        move |value: MjValue, key: Option<String>| -> MjValue {
+            let key = key.unwrap_or_default();
+            let is_sample = samples.as_ref().map_or(false, |s| s.contains(&key));
+            let text = if value.is_undefined() || value.is_none() {
+                String::new()
+            } else {
+                value.to_string()
+            };
+            let class = if is_sample {
+                "rs-field rs-sample"
+            } else {
+                "rs-field"
+            };
+            let sample_attr = if is_sample { " data-sample=\"1\"" } else { "" };
+            MjValue::from_safe_string(format!(
+                "<span class=\"{}\" data-field=\"{}\"{}>{}</span>",
+                class,
+                html_escape(&key),
+                sample_attr,
+                html_escape(&text)
+            ))
+        },
+    );
     env
 }
 
@@ -410,9 +414,7 @@ fn page_geometry(page: &PageDef, named: Option<i64>) -> String {
     let mr = page.mr.clone().unwrap_or_else(|| "0mm".into());
     let mb = page.mb.clone().unwrap_or_else(|| "0mm".into());
     let ml = page.ml.clone().unwrap_or_else(|| "0mm".into());
-    let vars = format!(
-        "--a4w: {w}; --a4h: {h}; --mt: {mt}; --mr: {mr}; --mb: {mb}; --ml: {ml};"
-    );
+    let vars = format!("--a4w: {w}; --a4h: {h}; --mt: {mt}; --mr: {mr}; --mb: {mb}; --ml: {ml};");
     match named {
         Some(n) => format!(
             "@page pg{n} {{ size: {size} {orientation}; margin: {margin}; }}\n[data-page=\"pg{n}\"] {{ page: pg{n}; {vars} }}"
@@ -467,14 +469,37 @@ fn wrap_page(
     } else {
         (content.to_string(), "")
     };
+    let preview_css = if thumb { "" } else { PREVIEW_CSS };
     format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n<base href=\"{base_href}\">\n<link rel=\"stylesheet\" href=\"../{assets_path}/base.css\">\n<style>\n{}{}\n</style></head><body>\n{}\n{thumb_flag}<script>\n{}\n</script>\n</body></html>\n",
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n<base href=\"{base_href}\">\n<link rel=\"stylesheet\" href=\"../{assets_path}/base.css\">\n<style>\n{}{}{}\n</style></head><body>\n{}\n{thumb_flag}<script>\n{}\n</script>\n</body></html>\n",
         page_geometry(page, None),
         flow_css,
+        preview_css,
         content,
         script
     )
 }
+
+/// 预览用内置样式：字段标记、hover/全部高亮、sample 蓝色高亮。
+/// 由渲染层统一注入，模板无需重复定义。
+pub const PREVIEW_CSS: &str = r#"
+/* 预览字段标记（缩略图不加载 .rs-annot，因而不显示标记） */
+.rs-annot .rs-field{border-bottom:1px dashed rgba(10,114,239,.55);}
+.rs-annot .rs-field:hover,
+.rs-annot .rs-field.rs-hit,
+.rs-annot .rs-field.rs-hover,
+.rs-annot.rs-all .rs-field{
+  border-bottom-color:transparent;
+  background-image:linear-gradient(180deg,transparent 56%,#ffe58f 56%);
+  border-radius:2px;
+}
+/* 由 sample 占位渲染的字段：始终蓝色荧光笔（与黄色区分） */
+.rs-annot .rs-field.rs-sample{
+  border-bottom-color:transparent;
+  background-image:linear-gradient(180deg,transparent 56%,#a5d8ff 56%);
+  border-radius:2px;
+}
+"#;
 
 /// 预览页注入脚本：收集 `.rs-field` 标记（含页面内矩形）并上报父窗口；响应定位/悬停高亮。
 const PREVIEW_JS: &str = r#"(function () {
@@ -613,8 +638,18 @@ pub fn render_print_html(
     manifest: &TemplateManifest,
     values: &Map<String, Value>,
 ) -> Result<String, String> {
+    render_print_html_with_samples(template_dir, manifest, values, None)
+}
+
+/// 同 `render_print_html`，但允许传入 sample 字段集合，用于开发服务器等预览场景。
+pub fn render_print_html_with_samples(
+    template_dir: &Path,
+    manifest: &TemplateManifest,
+    values: &Map<String, Value>,
+    samples: Option<Arc<HashSet<String>>>,
+) -> Result<String, String> {
     let resolved = resolve_values(manifest, values)?;
-    let env = make_env(Some(template_dir.to_path_buf()), None);
+    let env = make_env(Some(template_dir.to_path_buf()), samples);
     let context = base_ctx(manifest, &resolved);
     let assets_path = manifest.assets_path();
     let pages_path = manifest.pages_path();
@@ -662,7 +697,8 @@ pub fn rewrite_resource_urls(
     values: &Map<String, Value>,
     mount_root: &str,
 ) -> Map<String, Value> {
-    let is_abs = |s: &str| s.starts_with("http://") || s.starts_with("https://") || s.starts_with("data:");
+    let is_abs =
+        |s: &str| s.starts_with("http://") || s.starts_with("https://") || s.starts_with("data:");
     let mut out = values.clone();
     for v in &manifest.variables {
         if v.ty != "image" && v.ty != "images" {
@@ -836,5 +872,42 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
 
+    #[test]
+    fn preview_injects_builtin_css_and_marks_samples() {
+        let dir = std::env::temp_dir().join(format!("rs-preview-css-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("pages")).unwrap();
+        std::fs::write(
+            dir.join("pages/f1.html"),
+            "<div class=\"paper\"><div class=\"page\">{{ name|field('name') }}</div></div>",
+        )
+        .unwrap();
+
+        let m: TemplateManifest = serde_json::from_str(
+            r#"{
+              "schemaVersion": 1, "id": "t", "version": "1", "name": "t",
+              "variables": [
+                { "key": "name", "alias": "名称", "type": "string", "sample": "示例" }
+              ],
+              "pages": [{ "file": "pages/f1.html" }]
+            }"#,
+        )
+        .unwrap();
+
+        let pages = render_preview_html(&dir, &m, &Map::new(), &m.pages, "http://x/").unwrap();
+        let (_, html, thumb) = &pages[0];
+
+        assert!(html.contains("rs-field rs-sample"), "sample 标记未生成");
+        assert!(
+            html.contains(".rs-annot .rs-field.rs-sample"),
+            "内置预览样式未注入"
+        );
+        assert!(html.contains("示例"));
+        assert!(
+            !thumb.contains(".rs-annot .rs-field.rs-sample"),
+            "缩略图不应注入预览样式"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -6,7 +6,13 @@
     variable,
     project,
     projectId,
-  }: { variable: VariableDef; project: Project; projectId: string } = $props();
+    onchange,
+  }: {
+    variable: VariableDef;
+    project: Project;
+    projectId: string;
+    onchange?: () => void;
+  } = $props();
 
   let busy = $state(false);
   let err = $state("");
@@ -60,6 +66,7 @@
     if (!files.length) return;
     busy = true;
     err = "";
+    let changed = false;
     try {
       for (const f of files) {
         if (!allowed(f.name)) {
@@ -75,8 +82,10 @@
           const next = [...list()];
           if (!next.includes(name)) next.push(name);
           project.values[variable.key] = next;
+          changed = true;
         } else {
           project.values[variable.key] = name;
+          changed = true;
           break;
         }
       }
@@ -84,6 +93,7 @@
       err = String(e);
     } finally {
       busy = false;
+      if (changed) onchange?.();
     }
   }
 
@@ -95,6 +105,7 @@
       project.values[variable.key] =
         typeof variable.default === "string" ? variable.default : "";
     }
+    onchange?.();
   }
   function move(i: number, d: number) {
     const arr = [...list()];
@@ -102,6 +113,7 @@
     if (j < 0 || j >= arr.length) return;
     [arr[i], arr[j]] = [arr[j], arr[i]];
     project.values[variable.key] = arr;
+    onchange?.();
   }
 </script>
 

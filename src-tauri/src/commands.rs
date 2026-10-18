@@ -328,6 +328,29 @@ pub async fn print_report(
         .map_err(|e| e.to_string())?
 }
 
+fn open_project_file(path: &str, overwrite: bool) -> Result<fs::File, String> {
+    let file = if overwrite {
+        fs::File::create(path)
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+    };
+    file.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("目标工程文件已存在：{path}")
+        } else {
+            e.to_string()
+        }
+    })
+}
+
+#[tauri::command]
+pub fn project_file_exists(path: String) -> bool {
+    Path::new(&path).is_file()
+}
+
 #[tauri::command]
 pub fn save_project(
     state: State<AppPaths>,
@@ -335,9 +358,10 @@ pub fn save_project(
     mut project: Project,
     embed_template: bool,
     project_id: Option<String>,
+    overwrite: Option<bool>,
 ) -> Result<(), String> {
     project.meta.updated_at = now();
-    let file = fs::File::create(&path).map_err(|e| e.to_string())?;
+    let file = open_project_file(&path, overwrite.unwrap_or(true))?;
     let mut zip = zip::ZipWriter::new(file);
     let opts: SimpleFileOptions =
         SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -493,4 +517,25 @@ pub fn open_project(state: State<AppPaths>, path: String) -> Result<OpenedProjec
         template_dir: tdir.to_string_lossy().to_string(),
         project_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_project_file_requires_overwrite_for_existing_file() {
+        let dir = std::env::temp_dir().join(format!("rs-save-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.rproj");
+        fs::write(&path, b"old").unwrap();
+
+        let err = open_project_file(path.to_str().unwrap(), false).unwrap_err();
+        assert!(err.contains("已存在"), "unexpected error: {err}");
+
+        let file = open_project_file(path.to_str().unwrap(), true).unwrap();
+        drop(file);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

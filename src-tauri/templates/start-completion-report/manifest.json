@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "start-completion-report",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "contentHash": "",
   "name": "开竣工报告、竣工验收证明书",
   "minAppVersion": "0.1.0",
@@ -19,7 +19,20 @@
       "key": "site",
       "alias": "工程地点",
       "type": "string",
+      "required": true,
       "sample": "大同市云冈区实验中学校"
+    },
+    {
+      "key": "project_content",
+      "alias": "工程内容",
+      "type": "text",
+      "required": true,
+      "sample": "室内地面维修"
+    },
+    {
+      "key": "structure_type",
+      "alias": "结构类型",
+      "type": "string"
     },
     {
       "key": "owner",
@@ -36,9 +49,10 @@
       "sample": "大同市铭诚科贸有限公司"
     },
     {
-      "key": "structure_type",
-      "alias": "结构类型",
-      "type": "string"
+      "key": "supervisor",
+      "alias": "监理单位",
+      "type": "string",
+      "help": "无监理可留空"
     },
     {
       "key": "building_area",
@@ -51,42 +65,9 @@
       "type": "string"
     },
     {
-      "key": "approval_no",
-      "alias": "工程批准文号",
-      "type": "string"
-    },
-    {
       "key": "budget",
       "alias": "预算造价",
       "type": "string"
-    },
-    {
-      "key": "contract_no",
-      "alias": "合同编号",
-      "type": "string"
-    },
-    {
-      "key": "contract_days",
-      "alias": "合同工期（日历天）",
-      "type": "string",
-      "sample": "6"
-    },
-    {
-      "key": "project_cost",
-      "alias": "工程造价",
-      "type": "string"
-    },
-    {
-      "key": "plan_work_days",
-      "alias": "计划工作日数（日历天）",
-      "type": "string",
-      "sample": "6"
-    },
-    {
-      "key": "actual_work_days",
-      "alias": "实际工作日数（日历天）",
-      "type": "string",
-      "sample": "6"
     },
     {
       "key": "plan_start_date",
@@ -113,122 +94,43 @@
       "sample": "2026-07-06"
     },
     {
-      "key": "start_sign_date",
-      "alias": "开工报告签署日期",
-      "type": "date",
-      "sample": "2026-07-01"
+      "key": "actual_work_days",
+      "alias": "实际工期",
+      "type": "computed",
+      "expression": "days_between(plan_start_date, plan_end_date)",
+      "help": "按计划开竣工日期自动计算"
     },
     {
-      "key": "finish_sign_date",
-      "alias": "竣工报告签署日期",
-      "type": "date",
-      "sample": "2026-07-06"
+      "key": "plan_work_days",
+      "alias": "计划工期",
+      "type": "computed",
+      "expression": "actual_work_days",
+      "help": "等于实际工期"
     },
     {
-      "key": "acceptance_date",
-      "alias": "验收日期",
-      "type": "date",
-      "sample": "2026-07-06"
-    },
-    {
-      "key": "drawing_review",
-      "alias": "施工图纸交审情况",
-      "type": "text",
-      "sample": "已通过会审"
-    },
-    {
-      "key": "material_prep",
-      "alias": "材料设备准备情况",
-      "type": "text",
-      "sample": "材料、设备已准备好，能满足施工需要"
-    },
-    {
-      "key": "site_mgmt",
-      "alias": "施工现场质量管理检查情况",
-      "type": "text",
-      "sample": "符合要求"
-    },
-    {
-      "key": "utility_prep",
-      "alias": "三通一平情况",
-      "type": "text",
-      "sample": "满足施工要求"
-    },
-    {
-      "key": "budget_review",
-      "alias": "工程预算编审情况",
-      "type": "text",
-      "sample": "已编制完成"
-    },
-    {
-      "key": "crew_entry",
-      "alias": "施工队伍进场情况",
-      "type": "text",
-      "sample": "已进场，能满足施工要求"
-    },
-    {
-      "key": "machine_entry",
-      "alias": "施工机械进场情况",
-      "type": "text",
-      "sample": "已进场，能满足施工要求"
-    },
-    {
-      "key": "complete_status",
-      "alias": "工程项目完成情况",
-      "type": "text",
-      "sample": "已完工"
-    },
-    {
-      "key": "cleanup",
-      "alias": "现场清理情况",
-      "type": "text",
-      "sample": "工完场清、合理堆放、及时清运"
-    },
-    {
-      "key": "doc_organize",
-      "alias": "施工资料整理情况",
-      "type": "text",
-      "sample": "资料真实完整，符合要求"
-    },
-    {
-      "key": "quality_accept",
-      "alias": "施工质量验收情况",
-      "type": "text",
-      "sample": "对验收提出问题，施工单位已全部整改完毕，并由各单位复验通过"
-    },
-    {
-      "key": "remaining",
-      "alias": "未完工程盘点情况",
-      "type": "text",
-      "sample": "/"
-    },
-    {
-      "key": "content_check",
-      "alias": "工程内容及检查情况",
-      "type": "text",
-      "sample": "室内地面维修 等均按要求完成"
-    },
-    {
-      "key": "acceptance_opinion",
-      "alias": "验收意见",
-      "type": "text",
-      "sample": "合格"
-    },
-    {
-      "key": "project_manager",
-      "alias": "项目负责人",
+      "key": "contract_no",
+      "alias": "合同编号",
       "type": "string"
     },
     {
-      "key": "unit_manager",
-      "alias": "单位负责人",
+      "key": "approval_no",
+      "alias": "工程批准文号",
       "type": "string"
     }
   ],
   "toc": [
-    { "title": "开工报告", "page": 1 },
-    { "title": "竣工报告", "page": 2 },
-    { "title": "竣工验收证明书", "page": 3 }
+    {
+      "title": "开工报告",
+      "page": 1
+    },
+    {
+      "title": "竣工报告",
+      "page": 2
+    },
+    {
+      "title": "竣工验收证明书",
+      "page": 3
+    }
   ],
   "pages": [
     {

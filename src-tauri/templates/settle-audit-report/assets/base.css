@@ -81,20 +81,3 @@ table.doc-tbl td.sigrow .sigcol{display:flex;flex-direction:column;justify-conte
   .paper:last-child{page-break-after:auto;}
   .paper .page{outline:none;}
 }
-
-/* 预览字段标记（缩略图用 ?thumb=1 不加载 .rs-annot，因而不显示标记） */
-.rs-annot .rs-field{border-bottom:1px dashed rgba(10,114,239,.55);}
-.rs-annot .rs-field:hover,
-.rs-annot .rs-field.rs-hit,
-.rs-annot .rs-field.rs-hover,
-.rs-annot.rs-all .rs-field{
-  border-bottom-color:transparent;
-  background-image:linear-gradient(180deg,transparent 56%,#ffe58f 56%);
-  border-radius:2px;
-}
-/* 由 sample 占位渲染的字段：始终蓝色荧光笔（与黄色区分） */
-.rs-annot .rs-field.rs-sample{
-  border-bottom-color:transparent;
-  background-image:linear-gradient(180deg,transparent 56%,#a5d8ff 56%);
-  border-radius:2px;
-}

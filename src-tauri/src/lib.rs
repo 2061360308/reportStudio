@@ -344,6 +344,7 @@ pub fn run() {
             commands::install_template,
             commands::export_template,
             commands::new_project,
+            commands::project_file_exists,
             commands::render_preview,
             commands::resolve_values,
             commands::add_resource,

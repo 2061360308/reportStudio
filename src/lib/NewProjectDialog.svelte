@@ -1,8 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { join } from "@tauri-apps/api/path";
+  import FilePlus from "@lucide/svelte/icons/file-plus";
+  import FolderOpen from "@lucide/svelte/icons/folder-open";
+  import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import * as api from "./api";
   import type { OpenedProject, TemplateInfo } from "./types";
+  import { GeneralDialog17 } from "$lib/components/elements/dialog";
+  import { Button } from "$lib/components/elements/button";
+  import { GeneralCheckbox01 } from "$lib/components/elements/checkbox";
+  import { Input } from "$lib/components/elements/input";
+  import { Label } from "$lib/components/elements/label";
+  import { cn } from "$lib/utils.js";
 
   let {
     oncreated,
@@ -14,31 +24,94 @@
     onsync?: () => Promise<void>;
   } = $props();
 
+  let dialogOpen = $state(true);
   let templates = $state<TemplateInfo[]>([]);
   let selected = $state("");
-  let savePath = $state("");
+  let saveDir = $state("");
+  let projectName = $state("默认项目");
   let busy = $state(false);
   let syncBusy = $state(false);
+  let loading = $state(true);
   let error = $state("");
+  let duplicatePath = $state("");
+  let overwriteConfirmed = $state(false);
+  let checkingPath = $state(false);
+  let checkSeq = 0;
 
   const chosen = $derived(templates.find((t) => t.id === selected) ?? null);
-  const projectName = $derived(basename(savePath));
+  const safeProjectName = $derived(sanitize(projectName) || "默认项目");
+  const templateLabel = $derived(
+    chosen ? sanitize(chosen.name) || sanitize(chosen.id) || "模板" : "",
+  );
+  const fileName = $derived(
+    chosen ? `${safeProjectName}-${templateLabel}.rproj` : "",
+  );
+  const canCreate = $derived(
+    !busy &&
+      !checkingPath &&
+      !!selected &&
+      !!saveDir &&
+      !!projectName.trim() &&
+      !!fileName &&
+      (!duplicatePath || overwriteConfirmed),
+  );
+
+  $effect(() => {
+    const dir = saveDir;
+    const name = fileName;
+    const seq = ++checkSeq;
+    let cancelled = false;
+
+    duplicatePath = "";
+    overwriteConfirmed = false;
+
+    if (!dir || !name) {
+      checkingPath = false;
+      return;
+    }
+
+    checkingPath = true;
+    const timer = setTimeout(async () => {
+      try {
+        const path = await join(dir, name);
+        const exists = await api.projectFileExists(path);
+        if (cancelled || seq !== checkSeq) return;
+        duplicatePath = exists ? path : "";
+      } catch (e) {
+        if (cancelled || seq !== checkSeq) return;
+        error = String(e);
+      } finally {
+        if (!cancelled && seq === checkSeq) checkingPath = false;
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  });
 
   onMount(load);
 
-  function basename(p: string): string {
-    if (!p) return "";
-    const name = p.split(/[\\/]/).pop() ?? "";
-    return name.replace(/\.[^.]+$/, "");
+  function sanitize(value: string): string {
+    return value
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/[\u0000-\u001f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[. ]+$/g, "");
   }
 
   async function load() {
     error = "";
+    loading = true;
     try {
       templates = await api.listTemplates();
       if (templates.length && !selected) selected = templates[0].id;
     } catch (e) {
       error = String(e);
+    } finally {
+      loading = false;
     }
   }
 
@@ -48,7 +121,6 @@
     error = "";
     try {
       await onsync();
-      // 同步成功后 App 会更新 templatesRefreshKey，弹窗重新挂载并加载列表。
     } catch (e) {
       error = String(e);
     } finally {
@@ -57,22 +129,42 @@
   }
 
   async function pickPath() {
-    const out = await saveDialog({
-      defaultPath: `${chosen?.name ?? "新建报告"}.rproj`,
-      filters: [{ name: "报告工程 (.rproj)", extensions: ["rproj"] }],
-    });
-    if (typeof out === "string") savePath = out;
+    error = "";
+    try {
+      const out = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath: saveDir || undefined,
+      });
+      if (typeof out === "string") saveDir = out;
+    } catch (e) {
+      error = String(e);
+    }
   }
 
   async function start() {
-    if (!selected || !savePath) return;
+    if (!canCreate) return;
     busy = true;
     error = "";
     try {
+      const path = await join(saveDir, fileName);
+      const exists = await api.projectFileExists(path);
+
+      if (exists) {
+        if (!overwriteConfirmed || duplicatePath !== path) {
+          duplicatePath = path;
+          overwriteConfirmed = false;
+          return;
+        }
+      } else {
+        duplicatePath = "";
+        overwriteConfirmed = false;
+      }
+
       const o = await api.newProject(selected);
-      o.project.meta.name = projectName || o.project.meta.name;
-      await api.saveProject(savePath, o.project, true, o.projectId);
-      oncreated(o, savePath);
+      o.project.meta.name = projectName.trim();
+      await api.saveProject(path, o.project, true, o.projectId, exists);
+      oncreated(o, path);
     } catch (e) {
       error = String(e);
     } finally {
@@ -80,236 +172,201 @@
     }
   }
 
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") oncancel();
+  function requestClose() {
+    if (!busy) oncancel();
   }
 </script>
 
-<svelte:window onkeydown={onkeydown} />
-
-<div
-  class="overlay"
-  role="presentation"
-  onclick={oncancel}
-  onkeydown={() => {}}
+<GeneralDialog17
+  bind:open={dialogOpen}
+  title="新建报告工程"
+  description="选择模板并保存到本地，创建后即可编辑。"
+  onclose={requestClose}
+  dismissible={!busy}
+  class="h-[min(90vh,640px)] max-w-xl"
 >
-  <div
-    class="dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-label="新建项目"
-    tabindex="-1"
-    onclick={(e) => e.stopPropagation()}
-    onkeydown={() => {}}
-  >
-    <h2>新建项目</h2>
-    <p class="sub">选择模板，并指定工程保存位置。</p>
+  {#snippet icon()}
+    <FilePlus class="h-4 w-4" aria-hidden="true" />
+  {/snippet}
 
-    <div class="body">
-      {#if templates.length === 0}
-        <p class="hint">
-          暂无已安装模板。首次使用需要从更新源同步模板。
+  <form
+    class="flex min-h-0 flex-1 flex-col"
+    onsubmit={(event) => {
+      event.preventDefault();
+      start();
+    }}
+  >
+    <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 py-5">
+      <div class="space-y-2">
+        <Label for="new-project-name">工程名称</Label>
+        <Input
+          id="new-project-name"
+          bind:value={projectName}
+          placeholder="默认项目"
+          autofocus
+        />
+        <p class="text-xs text-muted-foreground">
+          用于工程标题和保存文件名，可随时修改。
         </p>
-        {#if onsync}
-          <button class="sync-btn" onclick={retrySync} disabled={syncBusy}>
-            {syncBusy ? "正在同步…" : "同步模板"}
-          </button>
-        {/if}
-      {:else}
-        <ul class="tpl-list">
-          {#each templates as t (t.id)}
-            <li>
-              <button
-                class="tpl"
-                class:selected={t.id === selected}
-                onclick={() => (selected = t.id)}
-                ondblclick={start}
+      </div>
+
+      <div class="flex min-h-36 flex-1 flex-col gap-2">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm font-medium leading-none">模板</span>
+          {#if !loading && templates.length}
+            <span class="text-xs text-muted-foreground">
+              {templates.length} 个可用
+            </span>
+          {/if}
+        </div>
+
+        {#if loading}
+          <div
+            class="flex min-h-0 flex-1 items-center justify-center rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            正在读取模板…
+          </div>
+        {:else if templates.length === 0}
+          <div
+            class="flex min-h-0 flex-1 flex-col items-center justify-center rounded-md border border-dashed border-border px-4 py-6 text-center"
+          >
+            <p class="text-sm text-muted-foreground">
+              暂无已安装模板。首次使用需要从更新源同步模板。
+            </p>
+            {#if onsync}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                class="mt-3"
+                onclick={retrySync}
+                disabled={syncBusy}
               >
-                <span class="tpl-name">{t.name}</span>
-                <span class="tpl-id mono">{t.id}</span>
-                <span class="pill">v{t.version}</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
+                {syncBusy ? "正在同步…" : "同步模板"}
+              </Button>
+            {/if}
+          </div>
+        {:else}
+          <div
+            class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border"
+          >
+            <div
+              class="min-h-0 flex-1 divide-y divide-border overflow-y-auto overscroll-contain"
+            >
+              {#each templates as t (t.id)}
+                <button
+                  type="button"
+                  class={cn(
+                    "flex w-full items-center gap-3 rounded-none px-3 py-2.5 text-left shadow-none transition-colors",
+                    selected === t.id
+                      ? "bg-primary/5"
+                      : "bg-background hover:bg-muted/60",
+                  )}
+                  aria-pressed={selected === t.id}
+                  onclick={() => (selected = t.id)}
+                  ondblclick={start}
+                >
+                  <span
+                    class={cn(
+                      "flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+                      selected === t.id
+                        ? "border-primary bg-primary"
+                        : "border-input bg-background",
+                    )}
+                    aria-hidden="true"
+                  >
+                    {#if selected === t.id}
+                      <span class="size-1.5 rounded-full bg-primary-foreground"
+                      ></span>
+                    {/if}
+                  </span>
+                  <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span class="truncate text-sm font-medium">{t.name}</span>
+                    <span class="mono truncate text-xs text-muted-foreground">
+                      {t.id}
+                    </span>
+                  </span>
+                  <span
+                    class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+                  >
+                    v{t.version}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <div class="space-y-2">
+        <Label for="new-project-dir">保存位置</Label>
+        <div class="flex gap-2">
+          <Input
+            id="new-project-dir"
+            readonly
+            value={saveDir}
+            placeholder="未选择文件夹"
+            title={saveDir}
+            class="flex-1 text-xs text-muted-foreground"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            class="shrink-0"
+            onclick={pickPath}
+            disabled={busy}
+          >
+            <FolderOpen class="h-4 w-4" aria-hidden="true" />
+            浏览…
+          </Button>
+        </div>
+        {#if fileName}
+          <p class="text-xs text-muted-foreground">
+            文件名：
+            <span class="mono break-all text-foreground">{fileName}</span>
+          </p>
+        {/if}
+      </div>
+
+      {#if error}
+        <div
+          class="flex gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+        >
+          <TriangleAlert
+            class="mt-0.5 h-4 w-4 shrink-0"
+            aria-hidden="true"
+          />
+          <pre class="whitespace-pre-wrap break-words font-sans">{error}</pre>
+        </div>
       {/if}
     </div>
 
-    <div class="path-row">
-      <span class="label">保存位置</span>
-      <button onclick={pickPath}>选择文件位置...</button>
-      <span class="path mono" title={savePath}>
-        {savePath || "未选择"}
-      </span>
-    </div>
-
-    {#if projectName}
-      <div class="name-row">
-        <span class="label">工程名称</span>
-        <span class="name">{projectName}</span>
-        <span class="ro">（由文件名自动读取，不可编辑）</span>
+    <div
+      class="flex items-center justify-between gap-4 border-t border-border bg-muted/40 px-6 py-4"
+    >
+      <div class="min-w-0" title={duplicatePath}>
+        {#if duplicatePath}
+          <GeneralCheckbox01
+            id="overwrite-existing-project"
+            bind:checked={overwriteConfirmed}
+            label="覆盖存在文件"
+            disabled={busy}
+          />
+        {/if}
       </div>
-    {/if}
-
-    {#if error}
-      <pre class="error">{error}</pre>
-    {/if}
-
-    <div class="actions">
-      <button onclick={oncancel} disabled={busy}>取消</button>
-      <button
-        class="primary"
-        onclick={start}
-        disabled={busy || !selected || !savePath}
-      >
-        开始
-      </button>
+      <div class="flex shrink-0 justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onclick={requestClose}
+          disabled={busy}
+        >
+          取消
+        </Button>
+        <Button type="submit" disabled={!canCreate}>
+          {busy ? "正在创建…" : "创建工程"}
+        </Button>
+      </div>
     </div>
-  </div>
-</div>
-
-<style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: rgba(0, 0, 0, 0.4);
-  }
-  .dialog {
-    width: 620px;
-    max-width: 92vw;
-    max-height: 88vh;
-    display: flex;
-    flex-direction: column;
-    padding: 24px;
-    border-radius: var(--radius-lg);
-    background: var(--panel);
-    box-shadow: var(--shadow-elev);
-  }
-  h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 600;
-    letter-spacing: -0.3px;
-  }
-  .sub {
-    margin: 6px 0 0;
-    font-size: 14px;
-    color: var(--text-secondary);
-  }
-
-  .body {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    margin: 18px 0 0;
-  }
-  .tpl-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 12px;
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .tpl {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
-    width: 100%;
-    padding: 14px 16px;
-    border: none;
-    border-radius: var(--radius-lg);
-    background: var(--panel);
-    box-shadow: var(--shadow-card);
-    color: var(--text);
-    text-align: left;
-    cursor: pointer;
-    transition: box-shadow 0.15s ease;
-  }
-  .tpl:hover {
-    background: var(--panel);
-    box-shadow: var(--shadow-elev);
-  }
-  .tpl.selected {
-    box-shadow:
-      0 0 0 2px var(--develop),
-      rgba(0, 0, 0, 0.04) 0px 2px 2px,
-      #fafafa 0px 0px 0px 1px;
-  }
-  .tpl-name {
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: -0.2px;
-  }
-  .tpl-id {
-    font-size: 12px;
-    color: var(--placeholder);
-  }
-  .pill {
-    margin-top: 2px;
-    padding: 2px 10px;
-    border-radius: var(--radius-pill);
-    background: var(--badge-bg);
-    color: var(--badge-text);
-    font-size: 12px;
-    font-weight: 500;
-  }
-
-  .path-row,
-  .name-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 16px;
-  }
-  .label {
-    flex: none;
-    width: 72px;
-    color: var(--text-secondary);
-    font-size: 14px;
-  }
-  .path {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .name {
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .ro {
-    color: var(--placeholder);
-    font-size: 12px;
-  }
-  .hint {
-    margin: 0;
-    font-size: 13px;
-    color: var(--placeholder);
-  }
-  .sync-btn {
-    margin-top: 12px;
-  }
-  .error {
-    margin: 14px 0 0;
-    color: var(--danger);
-    font-size: 13px;
-    white-space: pre-wrap;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    margin-top: 24px;
-  }
-</style>
+  </form>
+</GeneralDialog17>

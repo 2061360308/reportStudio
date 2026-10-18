@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import type { Update } from "@tauri-apps/plugin-updater";
   import * as api from "$lib/api";
   import * as Menubar from "$lib/components/elements/menubar";
@@ -28,9 +29,12 @@
   } from "$lib/types";
 
   const RECENT_KEY = "report-studio:recent";
+  const BASE_TITLE = "报告工坊";
+  const MAX_TITLE_NAME = 30;
 
   let opened = $state<OpenedProject | null>(null);
   let projectPath = $state<string | null>(null);
+  let dirty = $state(false);
   let tab = $state("vars");
   let recent = $state<RecentItem[]>([]);
   let showNew = $state(false);
@@ -54,9 +58,32 @@
   let templateMessage = $state("");
   let showFirstRunSync = $state(false);
 
+  const windowTitle = $derived.by(() => {
+    const name = opened?.project.meta.name?.trim();
+    const suffix = dirty ? "*" : "";
+    if (!name) return `${BASE_TITLE}${suffix}`;
+    const chars = Array.from(name);
+    const clipped =
+      chars.length > MAX_TITLE_NAME
+        ? `${chars.slice(0, MAX_TITLE_NAME).join("")}…`
+        : name;
+    return `${BASE_TITLE} - ${clipped}${suffix}`;
+  });
+
+  $effect(() => {
+    const title = windowTitle;
+    if (typeof document !== "undefined") document.title = title;
+    if (!isTauriRuntime()) return;
+    void getCurrentWindow().setTitle(title).catch(() => {});
+  });
+
   function editField(key: string) {
     focusReq = { key, n: (focusReq?.n ?? 0) + 1 };
     tab = "vars";
+  }
+
+  function markDirty() {
+    dirty = true;
   }
 
   onMount(() => {
@@ -234,6 +261,8 @@
     pushRecent({ name: o.project.meta.name, path, template: o.manifest.name });
     opened = o;
     projectPath = path;
+    dirty = false;
+    focusReq = null;
     showNew = false;
     tab = "vars";
   }
@@ -253,6 +282,8 @@
       pushRecent({ name: o.project.meta.name, path, template: o.manifest.name });
       opened = o;
       projectPath = path;
+      dirty = false;
+      focusReq = null;
       tab = "vars";
     } catch (e) {
       toastMsg(String(e));
@@ -285,6 +316,7 @@
     try {
       await api.saveProject(projectPath, opened.project, true, opened.projectId);
       opened.project.meta.updatedAt = new Date().toISOString();
+      dirty = false;
       toastMsg("已保存工程");
     } catch (e) {
       toastMsg(String(e));
@@ -301,6 +333,7 @@
     try {
       await api.saveProject(out, opened.project, true, opened.projectId);
       opened.project.meta.updatedAt = new Date().toISOString();
+      dirty = false;
       projectPath = out;
       pushRecent({
         name: opened.project.meta.name,
@@ -345,9 +378,11 @@
     }
   }
 
-  function backToWelcome() {
+  function closeProject() {
     opened = null;
     projectPath = null;
+    dirty = false;
+    focusReq = null;
     tab = "vars";
   }
 
@@ -420,6 +455,9 @@
           <Menubar.Item onSelect={openExisting}>
             打开项目 <Menubar.Shortcut>Ctrl O</Menubar.Shortcut>
           </Menubar.Item>
+          <Menubar.Item onSelect={closeProject} disabled={!opened}>
+            关闭项目
+          </Menubar.Item>
           <Menubar.Item onSelect={installTemplate}>
             载入新模板
           </Menubar.Item>
@@ -453,9 +491,6 @@
           <Menubar.Item onSelect={refreshPreview} disabled={!opened || tab !== "preview"}>
             刷新预览 <Menubar.Shortcut>Ctrl R</Menubar.Shortcut>
           </Menubar.Item>
-          <Menubar.Item onSelect={backToWelcome} disabled={!opened}>
-            返回欢迎
-          </Menubar.Item>
         </Menubar.Content>
       </Menubar.Menu>
 
@@ -484,6 +519,7 @@
             templateDir={opened.templateDir}
             projectId={opened.projectId}
             {focusReq}
+            onchange={markDirty}
           />
         {:else}
           {#key refreshKey}

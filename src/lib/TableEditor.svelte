@@ -4,7 +4,15 @@
   import "handsontable/dist/handsontable.full.css";
   import type { ColumnDef, Project, VariableDef } from "./types";
 
-  let { variable, project }: { variable: VariableDef; project: Project } = $props();
+  let {
+    variable,
+    project,
+    onchange,
+  }: {
+    variable: VariableDef;
+    project: Project;
+    onchange?: () => void;
+  } = $props();
 
   let container: HTMLDivElement;
   let hot: Handsontable | null = null;
@@ -30,7 +38,9 @@
   }
 
   function sync() {
-    if (hot) project.values[variable.key] = hot.getSourceData();
+    if (!hot) return;
+    project.values[variable.key] = hot.getSourceData();
+    onchange?.();
   }
 
   onMount(() => {

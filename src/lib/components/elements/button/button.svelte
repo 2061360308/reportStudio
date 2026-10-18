@@ -9,8 +9,8 @@
     children,
     ...restProps
   }: HTMLButtonAttributes & {
-    variant?: "default" | "secondary" | "outline" | "ghost";
-    size?: "default" | "sm" | "lg" | "icon";
+    variant?: "default" | "secondary" | "outline" | "ghost" | "link";
+    size?: "default" | "sm" | "lg" | "icon" | "icon-sm";
   } = $props();
 
   const variants = {
@@ -21,12 +21,14 @@
     outline:
       "bg-background shadow-xs hover:bg-accent hover:text-accent-foreground",
     ghost: "shadow-none hover:bg-accent hover:text-accent-foreground",
+    link: "text-primary underline-offset-4 shadow-none hover:underline",
   };
   const sizes = {
     default: "h-9 px-4 py-2",
     sm: "h-8 px-3 text-xs",
     lg: "h-10 px-6",
     icon: "size-9",
+    "icon-sm": "size-8",
   };
 </script>
 

@@ -10,6 +10,7 @@ use report_core::templates;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ struct DevState {
     template_dir: PathBuf,
     manifest: TemplateManifest,
     base_values: Map<String, Value>,
+    base_sample_keys: HashSet<String>,
     /// 服务器根地址（http://127.0.0.1:<port>/），用于把资源值改写为绝对 URL
     base_url: String,
 }
@@ -74,7 +76,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let base_values = load_values(&manifest, values_file.as_deref());
+    let (base_values, base_sample_keys) = load_values(&manifest, values_file.as_deref());
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -85,7 +87,14 @@ fn main() {
     println!("模板开发服务器已启动：");
     println!("  地址：http://127.0.0.1:{}", addr.port());
     println!("  模板：{}", template_dir.display());
-    println!("  变量：默认取自 manifest.sample{}", if values_file.is_some() { "（并叠加 --values）" } else { "" });
+    println!(
+        "  变量：默认取自 manifest.sample{}",
+        if values_file.is_some() {
+            "（并叠加 --values）"
+        } else {
+            ""
+        }
+    );
     println!("改动模板文件后浏览器会自动重载（Ctrl+C 退出）");
 
     // 优雅退出：Ctrl+C 时以 0 退出，避免 cargo/npm 报 “process didn't exit successfully”。
@@ -98,6 +107,7 @@ fn main() {
         template_dir,
         manifest,
         base_values,
+        base_sample_keys,
         base_url: format!("http://127.0.0.1:{}/", addr.port()),
     });
 
@@ -283,29 +293,30 @@ fn print_help() {
     );
 }
 
-fn sample_values(manifest: &TemplateManifest) -> Map<String, Value> {
-    let mut m = Map::new();
+fn load_values(
+    manifest: &TemplateManifest,
+    file: Option<&str>,
+) -> (Map<String, Value>, HashSet<String>) {
+    let mut values = Map::new();
+    let mut samples = HashSet::new();
     for v in &manifest.variables {
         if v.ty == "computed" {
             continue;
         }
-        if let Some(s) = &v.sample {
-            m.insert(v.key.clone(), s.clone());
-        } else if let Some(d) = &v.default {
-            m.insert(v.key.clone(), d.clone());
+        if let Some(sample) = &v.sample {
+            values.insert(v.key.clone(), sample.clone());
+            samples.insert(v.key.clone());
+        } else if let Some(default) = &v.default {
+            values.insert(v.key.clone(), default.clone());
         }
     }
-    m
-}
-
-fn load_values(manifest: &TemplateManifest, file: Option<&str>) -> Map<String, Value> {
-    let mut m = sample_values(manifest);
     if let Some(f) = file {
         match std::fs::read_to_string(f) {
             Ok(txt) => match serde_json::from_str::<Value>(&txt) {
                 Ok(Value::Object(o)) => {
                     for (k, v) in o {
-                        m.insert(k, v);
+                        samples.remove(&k);
+                        values.insert(k, v);
                     }
                 }
                 _ => eprintln!("--values 文件不是 JSON 对象，已忽略：{f}"),
@@ -313,7 +324,7 @@ fn load_values(manifest: &TemplateManifest, file: Option<&str>) -> Map<String, V
             Err(e) => eprintln!("读取 --values 文件失败：{e}"),
         }
     }
-    m
+    (values, samples)
 }
 
 fn handle(mut stream: TcpStream, st: &DevState) -> std::io::Result<()> {
@@ -329,7 +340,12 @@ fn handle(mut stream: TcpStream, st: &DevState) -> std::io::Result<()> {
 
     if path == "/__ver" {
         let v = fingerprint(&st.template_dir);
-        return respond(&mut stream, "200 OK", "text/plain; charset=utf-8", v.as_bytes());
+        return respond(
+            &mut stream,
+            "200 OK",
+            "text/plain; charset=utf-8",
+            v.as_bytes(),
+        );
     }
 
     if path == "/" || path == "/index.html" {
@@ -366,7 +382,12 @@ fn handle(mut stream: TcpStream, st: &DevState) -> std::io::Result<()> {
         }
     }
 
-    respond(&mut stream, "404 Not Found", "text/plain; charset=utf-8", b"404")
+    respond(
+        &mut stream,
+        "404 Not Found",
+        "text/plain; charset=utf-8",
+        b"404",
+    )
 }
 
 fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
@@ -403,20 +424,26 @@ fn build_page(st: &DevState, query: &str) -> Result<String, String> {
         .any(|(k, v)| k == "annot" && (v == "1" || v == "true" || v == "on"));
 
     let mut values = st.base_values.clone();
+    let mut sample_keys = st.base_sample_keys.clone();
     for (k, v) in &pairs {
         if k == "annot" {
             continue;
         }
         if let Some(def) = st.manifest.variables.iter().find(|x| &x.key == k) {
             values.insert(k.clone(), coerce(&def.ty, v));
+            sample_keys.remove(k);
         }
     }
 
-    let mut doc = render::render_print_html(
+    let mut doc = render::render_print_html_with_samples(
         &st.template_dir,
         &st.manifest,
         &render::rewrite_resource_urls(&st.manifest, &values, &st.base_url),
+        Some(Arc::new(sample_keys)),
     )?;
+    if let Some(pos) = doc.find("</head>") {
+        doc.insert_str(pos, &format!("<style>\n{}</style>", render::PREVIEW_CSS));
+    }
     let form = build_form(&st.manifest, &values, annot);
     if let Some(pos) = doc.find("<body>") {
         doc.insert_str(
@@ -504,11 +531,7 @@ body{transition:padding-left .22s ease}
 html.rs-panel-open body{padding-left:300px}
 </style>"#;
 
-fn build_form(
-    manifest: &TemplateManifest,
-    values: &Map<String, Value>,
-    annot: bool,
-) -> String {
+fn build_form(manifest: &TemplateManifest, values: &Map<String, Value>, annot: bool) -> String {
     let fields: Vec<_> = manifest
         .variables
         .iter()
@@ -679,7 +702,12 @@ fn fingerprint(dir: &Path) -> String {
     files.sort();
     let mut h: u64 = 0xcbf29ce484222325;
     for (name, len, mtime) in files {
-        for b in name.as_bytes().iter().chain(len.to_le_bytes().iter()).chain(mtime.to_le_bytes().iter()) {
+        for b in name
+            .as_bytes()
+            .iter()
+            .chain(len.to_le_bytes().iter())
+            .chain(mtime.to_le_bytes().iter())
+        {
             h ^= *b as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
