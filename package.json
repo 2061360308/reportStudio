@@ -1,6 +1,6 @@
 {
   "name": "report-studio",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "工程报告生成工具",
   "type": "module",
   "scripts": {
