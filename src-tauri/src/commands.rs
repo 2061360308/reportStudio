@@ -1,4 +1,5 @@
 use crate::pdf;
+use crate::usage;
 use report_core::model::*;
 use report_core::render;
 use report_core::templates;
@@ -27,11 +28,15 @@ pub struct AppPaths {
     pub renders_dir: PathBuf,
     /// 工程内嵌模板快照（数据目录，避免依赖安装目录或缓存目录）。
     pub embedded_templates_dir: PathBuf,
+    /// 模板最近使用与变量最近值（用户数据目录）。
+    pub usage_dir: PathBuf,
     pub mounts: Mutex<HashMap<String, Mount>>,
     /// 供系统打印窗口加载的临时合并 PDF。
     pub generated_pdfs: Mutex<HashMap<String, PathBuf>>,
     /// 模板同步/安装串行锁，避免并发覆盖同一目录。
     pub template_sync: std::sync::atomic::AtomicBool,
+    /// 首次启动时由文件关联传入、等待前端打开的工程路径。
+    pub launch_project: Mutex<Option<String>>,
 }
 
 #[derive(serde::Serialize)]
@@ -42,6 +47,11 @@ pub struct AppInfo {
     pub templates_dir: String,
     pub renders_dir: String,
     pub embedded_templates_dir: String,
+}
+
+#[tauri::command]
+pub fn take_launch_project(state: State<AppPaths>) -> Option<String> {
+    state.launch_project.lock().unwrap().take()
 }
 
 #[tauri::command]
@@ -122,9 +132,69 @@ pub fn list_templates(state: State<AppPaths>) -> Result<Vec<TemplateInfo>, Strin
 }
 
 #[tauri::command]
+pub fn list_template_usage(
+    state: State<AppPaths>,
+) -> Vec<usage::TemplateUsageSummary> {
+    usage::list_usage(&state.usage_dir)
+}
+
+#[tauri::command]
+pub fn get_template_usage(
+    state: State<AppPaths>,
+    template_id: String,
+) -> usage::TemplateUsage {
+    usage::read_usage(&state.usage_dir, &template_id)
+}
+
+#[tauri::command]
+pub fn record_template_values(
+    state: State<AppPaths>,
+    template_id: String,
+    values: Map<String, Value>,
+) -> Result<(), String> {
+    usage::record_values(&state.usage_dir, &template_id, &values)
+}
+
+#[tauri::command]
 pub fn get_manifest(state: State<AppPaths>, template_id: String) -> Result<TemplateManifest, String> {
     let dir = templates::template_dir(&state.templates_dir, &template_id);
     templates::read_manifest(&dir)
+}
+
+/// 读取模板目录内的文本文件（目前用于校验钩子脚本）。
+/// 只允许模板目录内的相对路径，并限制为 .js 文件和 1 MB 以内。
+#[tauri::command]
+pub fn read_template_text(template_dir: String, path: String) -> Result<String, String> {
+    const MAX_TEXT_BYTES: u64 = 1024 * 1024;
+    let root = PathBuf::from(&template_dir)
+        .canonicalize()
+        .map_err(|e| format!("模板目录不可用: {e}"))?;
+    let rel = Path::new(&path);
+    if path.trim().is_empty() || rel.is_absolute() {
+        return Err("模板文件路径必须是相对路径".to_string());
+    }
+    let file = root
+        .join(rel)
+        .canonicalize()
+        .map_err(|e| format!("模板文件不存在: {e}"))?;
+    if !file.starts_with(&root) {
+        return Err("模板文件路径越界".to_string());
+    }
+    let ext = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "js" {
+        return Err("只允许读取 .js 模板文件".to_string());
+    }
+    let size = fs::metadata(&file)
+        .map_err(|e| format!("读取模板文件失败: {e}"))?
+        .len();
+    if size > MAX_TEXT_BYTES {
+        return Err("模板文件过大".to_string());
+    }
+    fs::read_to_string(&file).map_err(|e| format!("读取模板文件失败: {e}"))
 }
 
 #[tauri::command]
@@ -145,6 +215,7 @@ pub fn export_template(
 pub fn new_project(state: State<AppPaths>, template_id: String) -> Result<OpenedProject, String> {
     let dir = templates::template_dir(&state.templates_dir, &template_id);
     let manifest = templates::read_manifest(&dir)?;
+    let _ = usage::touch_template(&state.usage_dir, &manifest.id);
     let project_id = uuid::Uuid::new_v4().to_string();
 
     // 建立工作目录与资源目录
@@ -568,6 +639,7 @@ pub fn open_project(state: State<AppPaths>, path: String) -> Result<OpenedProjec
     };
 
     let manifest = templates::read_manifest(&tdir)?;
+    let _ = usage::touch_template(&state.usage_dir, &manifest.id);
     project.template_ref.version = manifest.version.clone();
     project.template_ref.content_hash = manifest.content_hash.clone();
 
@@ -628,6 +700,50 @@ mod tests {
 
         let file = open_project_file(path.to_str().unwrap(), true).unwrap();
         drop(file);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_template_text_reads_js_inside_template() {
+        let dir = std::env::temp_dir().join(format!("rs-hook-{}", uuid::Uuid::new_v4()));
+        let assets = dir.join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(
+            assets.join("validate.js"),
+            "window.__RS_TEMPLATE_VALIDATE__ = () => true;",
+        )
+        .unwrap();
+
+        let text = read_template_text(
+            dir.to_string_lossy().to_string(),
+            "assets/validate.js".to_string(),
+        )
+        .unwrap();
+        assert!(text.contains("__RS_TEMPLATE_VALIDATE__"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_template_text_rejects_outside_path_and_non_js() {
+        let dir = std::env::temp_dir().join(format!("rs-hook-{}", uuid::Uuid::new_v4()));
+        let tpl = dir.join("tpl");
+        let assets = tpl.join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(dir.join("outside.js"), "outside").unwrap();
+        fs::write(assets.join("validate.txt"), "text").unwrap();
+
+        assert!(read_template_text(
+            tpl.to_string_lossy().to_string(),
+            "../outside.js".to_string(),
+        )
+        .is_err());
+        assert!(read_template_text(
+            tpl.to_string_lossy().to_string(),
+            "assets/validate.txt".to_string(),
+        )
+        .is_err());
 
         let _ = fs::remove_dir_all(&dir);
     }

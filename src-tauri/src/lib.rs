@@ -1,13 +1,29 @@
 mod commands;
 mod pdf;
 mod template_sync;
+mod usage;
 
 use report_core::{render, templates};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+/// 从命令行参数中识别由文件关联传入的工程文件。
+fn project_path_arg(arg: &OsStr) -> Option<PathBuf> {
+    let path = Path::new(arg);
+    let is_project = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rproj"));
+    if is_project && path.is_file() {
+        Some(path.to_path_buf())
+    } else {
+        None
+    }
+}
 
 fn parse_byte_range(header: &str, total: usize) -> Option<(usize, usize)> {
     let value = header.strip_prefix("bytes=")?;
@@ -201,6 +217,20 @@ fn migrate_embedded_snapshots(old: &Path, new: &Path) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(path) = argv
+                .iter()
+                .skip(1)
+                .find_map(|arg| project_path_arg(OsStr::new(arg)))
+            {
+                let _ = app.emit("open-project", path.to_string_lossy().to_string());
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
@@ -384,9 +414,11 @@ pub fn run() {
 
             let renders_dir = cache.join("renders");
             let embedded_templates_dir = data.join("embedded-templates");
+            let usage_dir = data.join("template-usage");
             fs::create_dir_all(&templates_dir).ok();
             fs::create_dir_all(&renders_dir).ok();
             fs::create_dir_all(&embedded_templates_dir).ok();
+            fs::create_dir_all(&usage_dir).ok();
             eprintln!("模板目录: {}", templates_dir.display());
             eprintln!("内嵌模板目录: {}", embedded_templates_dir.display());
             cleanup_embedded_temp(&embedded_templates_dir);
@@ -418,13 +450,20 @@ pub fn run() {
                 let _ = fs::remove_dir_all(&print_tmp);
             }
 
+            let launch_project = std::env::args_os()
+                .skip(1)
+                .find_map(|arg| project_path_arg(&arg))
+                .map(|path| path.to_string_lossy().to_string());
+
             app.manage(commands::AppPaths {
                 templates_dir,
                 renders_dir,
                 embedded_templates_dir,
+                usage_dir,
                 mounts: Mutex::new(HashMap::new()),
                 generated_pdfs: Mutex::new(HashMap::new()),
                 template_sync: std::sync::atomic::AtomicBool::new(false),
+                launch_project: Mutex::new(launch_project),
             });
 
             // 无头自检：RS_SELFTEST=1 时，启动后自动走一遍"渲染 + 进程内 PrintToPdf"。
@@ -445,8 +484,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
+            commands::take_launch_project,
             commands::list_templates,
+            commands::list_template_usage,
+            commands::get_template_usage,
+            commands::record_template_values,
             commands::get_manifest,
+            commands::read_template_text,
             commands::install_template,
             commands::export_template,
             commands::new_project,

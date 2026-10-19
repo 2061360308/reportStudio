@@ -1,12 +1,15 @@
 {
   "schemaVersion": 1,
   "id": "start-completion-report",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "contentHash": "",
   "name": "开竣工报告、竣工验收证明书",
-  "minAppVersion": "0.1.0",
+  "minAppVersion": "0.2.0",
   "assetsPath": "assets",
   "pagesPath": "pages",
+  "hooks": {
+    "validate": "assets/validate.js"
+  },
   "variables": [
     {
       "key": "project_name",

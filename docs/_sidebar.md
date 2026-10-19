@@ -1,4 +1,6 @@
 - [首页](README.md)
+- 模板开发
+  - [模板编写指南](templates.md)
 - 开发文档
   - [发版与自动更新](dev/release.md)
   - [文档站与下载按钮](dev/pages.md)

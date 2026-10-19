@@ -1,6 +1,6 @@
 [package]
 name = "report-studio"
-version = "0.2.0"
+version = "0.2.1"
 description = "工程报告生成工具"
 authors = ["you"]
 edition = "2021"
@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 report-core = { path = "crates/report-core" }
 tauri = { version = "2", features = ["protocol-asset", "unstable"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"

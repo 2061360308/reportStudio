@@ -1,5 +1,24 @@
 # 更新日志
 
+## 0.2.1
+
+- feat: 新增模板变量校验钩子，支持 Worker 隔离执行、输入即时提示、导出/打印前拦截
+- feat: 新增统一校验结果 Dialog，错误阻止导出/打印，警告允许确认后继续
+- feat: 字段增加错误/警告图标与 Tooltip，支持多字段关联提示
+- feat: 移除顶部校验汇总条，校验信息改为字段状态、Tooltip 和 Dialog 展示
+- feat: 模板开发服务器支持校验钩子，并新增“校验导出”按钮
+- feat: 新建项目模板列表按最近使用时间排序
+- feat: 每个模板记录变量最近使用值，输入框支持最近值候选菜单
+- feat: 最近值菜单支持聚焦显示、输入过滤、鼠标点击和键盘选择
+- feat: 新增 GeneralTooltip03、GeneralNotification06、RecentValueMenu 组件
+- feat: PDF 生成成功改为 Notification，提供“打开文件”和“打开文件夹”操作
+- feat: 移除 Toast，统一使用 Notification 展示操作结果
+- feat: 安装时关联 .rproj 工程文件，支持双击打开并显示独立文件图标
+- fix: 修复 opener 权限 scope 未配置导致无法打开 PDF 路径
+- fix: 修复原生 date input 输入不存在的日期时 value 为空、无法触发校验的问题
+- chore: 新增模板使用记录模块，数据保存到用户数据目录
+- chore: 示例模板同步更新：竣工结算审核报告 1.0.1、开竣工报告 1.0.2
+
 ## 0.2.0
 
 - feat: PDF 输出改为按 manifest 页面逐页设置纸张尺寸/方向，并合并为单个 PDF

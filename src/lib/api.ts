@@ -9,14 +9,34 @@ import type {
   TemplateManifest,
   TemplateSyncEvent,
   TemplateUpdateInfo,
+  TemplateUsage,
+  TemplateUsageSummary,
 } from "./types";
 
 export const getAppInfo = () => invoke<AppInfo>("get_app_info");
 
+export const takeLaunchProject = () =>
+  invoke<string | null>("take_launch_project");
+
 export const listTemplates = () => invoke<TemplateInfo[]>("list_templates");
+
+export const listTemplateUsage = () =>
+  invoke<TemplateUsageSummary[]>("list_template_usage");
+
+export const getTemplateUsage = (templateId: string) =>
+  invoke<TemplateUsage>("get_template_usage", { templateId });
+
+export const recordTemplateValues = (
+  templateId: string,
+  values: Record<string, unknown>,
+) =>
+  invoke<void>("record_template_values", { templateId, values });
 
 export const getManifest = (templateId: string) =>
   invoke<TemplateManifest>("get_manifest", { templateId });
+
+export const readTemplateText = (templateDir: string, path: string) =>
+  invoke<string>("read_template_text", { templateDir, path });
 
 export const newProject = (templateId: string) =>
   invoke<OpenedProject>("new_project", { templateId });

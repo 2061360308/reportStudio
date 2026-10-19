@@ -2,17 +2,23 @@
   import { onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
+  import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { openPath as openWithSystem } from "@tauri-apps/plugin-opener";
+  import {
+    openPath as openWithSystem,
+    revealItemInDir,
+  } from "@tauri-apps/plugin-opener";
   import type { Update } from "@tauri-apps/plugin-updater";
   import * as api from "$lib/api";
   import * as Menubar from "$lib/components/elements/menubar";
+  import { GeneralNotification06 } from "$lib/components/elements/notification";
   import Start from "$lib/Start.svelte";
   import Editor from "$lib/Editor.svelte";
   import Preview from "$lib/Preview.svelte";
   import NewProjectDialog from "$lib/NewProjectDialog.svelte";
   import AboutDialog from "$lib/AboutDialog.svelte";
   import UpdatesDialog from "$lib/UpdatesDialog.svelte";
+  import ValidationDialog from "$lib/ValidationDialog.svelte";
   import TemplateSyncOverlay from "$lib/TemplateSyncOverlay.svelte";
   import {
     checkAppUpdate,
@@ -21,17 +27,42 @@
     skipVersion,
   } from "$lib/updater";
   import { findTemplateUpdates, syncAllTemplates } from "$lib/templateSync";
+  import { TemplateValidation } from "$lib/templateHooks";
   import type {
     OpenedProject,
     RecentItem,
     TemplateInfo,
     TemplateSyncEvent,
     TemplateUpdateInfo,
+    ValidationIssue,
   } from "$lib/types";
 
   const RECENT_KEY = "report-studio:recent";
   const BASE_TITLE = "报告工坊";
   const MAX_TITLE_NAME = 30;
+  const DEFAULT_NOTIFICATION_MS = 3500;
+  const DEFAULT_ERROR_MS = 6000;
+  const RECENT_VALUE_TYPES = new Set([
+    "string",
+    "text",
+    "number",
+    "integer",
+    "money",
+    "percent",
+  ]);
+
+  type NotificationTone = "success" | "error" | "warning" | "info";
+
+  interface AppNotification {
+    title: string;
+    description?: string;
+    tone?: NotificationTone;
+    primaryLabel?: string;
+    secondaryLabel?: string;
+    onprimary?: () => void;
+    onsecondary?: () => void;
+    autoDismissMs?: number;
+  }
 
   let opened = $state<OpenedProject | null>(null);
   let projectPath = $state<string | null>(null);
@@ -41,9 +72,17 @@
   let showNew = $state(false);
   let refreshKey = $state(0);
   let templatesRefreshKey = $state(0);
-  let toast = $state("");
+  let notification = $state<AppNotification | null>(null);
+  let notificationTimer: ReturnType<typeof setTimeout> | undefined;
   let focusReq = $state<{ key: string; n: number } | null>(null);
-  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  let validation = $state<TemplateValidation | null>(null);
+  let localValidationIssues = $state<ValidationIssue[]>([]);
+  let usageVersion = $state(0);
+  let validationDialog = $state<{
+    issues: ValidationIssue[];
+    actionLabel?: string;
+  } | null>(null);
+  let validationDialogResolve: ((proceed: boolean) => void) | null = null;
 
   let showAbout = $state(false);
   let updatesOpen = $state(false);
@@ -81,6 +120,26 @@
     void getCurrentWindow().setTitle(title).catch(() => {});
   });
 
+  $effect(() => {
+    const current = opened;
+    localValidationIssues = [];
+    const hookPath =
+      current && typeof current.manifest.hooks?.validate === "string"
+        ? current.manifest.hooks.validate
+        : "";
+    const next =
+      current && hookPath
+        ? new TemplateValidation({
+            templateDir: current.templateDir,
+            hookPath,
+            variables: current.manifest.variables,
+            readText: api.readTemplateText,
+          })
+        : null;
+    validation = next;
+    return () => next?.dispose();
+  });
+
   function editField(key: string) {
     focusReq = { key, n: (focusReq?.n ?? 0) + 1 };
     tab = "vars";
@@ -92,13 +151,41 @@
 
   onMount(() => {
     loadRecent();
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+
     if (isTauriRuntime()) {
       getVersion()
         .then((version) => (appVersion = version))
         .catch(() => {});
+
+      void (async () => {
+        try {
+          const off = await listen<string>("open-project", (event) => {
+            if (typeof event.payload === "string" && event.payload) {
+              void openPath(event.payload);
+            }
+          });
+          if (disposed) {
+            off();
+            return;
+          }
+          unlisten = off;
+
+          const pending = await api.takeLaunchProject();
+          if (!disposed && pending) await openPath(pending);
+        } catch {
+          // 文件关联不可用时忽略
+        }
+      })();
     }
+
     const timer = setTimeout(runStartupChecks, 3000);
-    return () => clearTimeout(timer);
+    return () => {
+      disposed = true;
+      unlisten?.();
+      clearTimeout(timer);
+    };
   });
 
   function loadRecent() {
@@ -118,10 +205,84 @@
     saveRecent();
   }
 
-  function toastMsg(msg: string) {
-    toast = msg;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (toast = ""), 3200);
+  function showNotification(next: AppNotification) {
+    clearTimeout(notificationTimer);
+    notification = next;
+    const delay =
+      next.autoDismissMs === undefined
+        ? next.tone === "error"
+          ? DEFAULT_ERROR_MS
+          : DEFAULT_NOTIFICATION_MS
+        : next.autoDismissMs;
+    if (delay <= 0) return;
+    notificationTimer = setTimeout(() => {
+      notification = null;
+    }, delay);
+  }
+
+  function notify(
+    title: string,
+    tone: NotificationTone = "success",
+    description?: string,
+  ) {
+    showNotification({ title, description, tone });
+  }
+
+  function notifyError(title: string, error: unknown) {
+    showNotification({
+      title,
+      description: String(error),
+      tone: "error",
+      autoDismissMs: DEFAULT_ERROR_MS,
+    });
+  }
+
+  function dismissNotification() {
+    clearTimeout(notificationTimer);
+    notification = null;
+  }
+
+  function fileName(path: string): string {
+    return path.split(/[\\/]/).pop() || path;
+  }
+
+  async function rememberTemplateValues() {
+    const current = opened;
+    if (!current) return;
+
+    const values: Record<string, unknown> = {};
+    for (const variable of current.manifest.variables) {
+      if (!RECENT_VALUE_TYPES.has(variable.type)) continue;
+      const value = current.project.values[variable.key];
+      if (value === undefined || value === null) continue;
+      if (typeof value === "string" && !value.trim()) continue;
+      if (typeof value === "number" && !Number.isFinite(value)) continue;
+      values[variable.key] = value;
+    }
+    if (!Object.keys(values).length) return;
+
+    try {
+      await api.recordTemplateValues(current.manifest.id, values);
+      usageVersion += 1;
+    } catch {
+      /* 最近值记录失败不影响主流程 */
+    }
+  }
+
+  async function openGeneratedFile(path: string) {
+    try {
+      await openWithSystem(path);
+    } catch (e) {
+      notifyError("打开文件失败", e);
+    }
+  }
+
+  async function revealGeneratedFile(path: string) {
+    try {
+      await revealItemInDir(path);
+    } catch (e) {
+      notifyError("打开文件夹失败", e);
+    }
   }
 
   /* ---------------- 更新 ---------------- */
@@ -164,10 +325,10 @@
       templatesRefreshKey += 1;
       showFirstRunSync = false;
       templateUpdates = [];
-      toastMsg(firstRun ? "模板准备完成" : "模板已更新");
+      notify(firstRun ? "模板准备完成" : "模板已更新", "success");
     } catch (e) {
       templateError = String(e);
-      if (!firstRun) toastMsg(`模板更新失败：${e}`);
+      if (!firstRun) notifyError("模板更新失败", e);
     } finally {
       templateSyncing = false;
     }
@@ -273,7 +434,7 @@
       focusReq = null;
       tab = "vars";
     } catch (e) {
-      toastMsg(String(e));
+      notifyError("打开工程失败", e);
       recent = recent.filter((r) => r.path !== path);
       saveRecent();
     }
@@ -288,9 +449,9 @@
     try {
       const t = await api.installTemplate(path);
       templatesRefreshKey += 1;
-      toastMsg(`已载入模板：${t.name}`);
+      notify("模板已载入", "success", t.name);
     } catch (e) {
-      toastMsg(String(e));
+      notifyError("模板载入失败", e);
     }
   }
 
@@ -304,9 +465,10 @@
       await api.saveProject(projectPath, opened.project, true, opened.projectId);
       opened.project.meta.updatedAt = new Date().toISOString();
       dirty = false;
-      toastMsg("已保存工程");
+      await rememberTemplateValues();
+      notify("工程已保存", "success");
     } catch (e) {
-      toastMsg(String(e));
+      notifyError("保存失败", e);
     }
   }
 
@@ -327,31 +489,116 @@
         path: out,
         template: opened.manifest.name,
       });
-      toastMsg("已另存为");
+      await rememberTemplateValues();
+      notify("工程已另存为", "success");
     } catch (e) {
-      toastMsg(String(e));
+      notifyError("另存为失败", e);
     }
   }
 
-  function validate(o: OpenedProject): string | null {
+  function requiredIssues(o: OpenedProject): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
     for (const v of o.manifest.variables) {
       if (v.required && v.type !== "computed") {
         const val = o.project.values[v.key];
         if (val === undefined || val === null || val === "") {
-          return `必填项未填写：${v.label ?? v.key}`;
+          issues.push({
+            status: "error",
+            keys: [v.key],
+            msg: `必填项未填写：${v.label ?? v.alias ?? v.key}`,
+          });
         }
       }
     }
-    return null;
+    return issues;
+  }
+
+  function dedupeIssues(issues: ValidationIssue[]): ValidationIssue[] {
+    const seen = new Set<string>();
+    return issues.filter((issue) => {
+      const key = `${issue.status}|${[...issue.keys].sort().join(",")}|${issue.msg}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  async function collectValidationIssues(): Promise<ValidationIssue[]> {
+    if (!opened) return [];
+    const issues = [...localValidationIssues, ...requiredIssues(opened)];
+    if (!validation) return dedupeIssues(issues);
+
+    let resolved: Record<string, unknown>;
+    try {
+      resolved = await api.resolveValues(
+        opened.templateDir,
+        opened.project.values,
+      );
+    } catch (e) {
+      issues.push({
+        status: "error",
+        keys: [],
+        msg: `校验失败：${String(e)}`,
+      });
+      return dedupeIssues(issues);
+    }
+
+    const hookIssues = await validation.run(
+      "beforeExport",
+      resolved,
+      opened.project.values,
+    );
+    issues.push(...hookIssues.filter((issue) => issue.status !== "ok"));
+    return dedupeIssues(issues);
+  }
+
+  function askValidation(
+    issues: ValidationIssue[],
+    actionLabel?: string,
+  ): Promise<boolean> {
+    const visible = issues.filter((issue) => issue.status !== "ok");
+    if (!visible.length) return Promise.resolve(true);
+    if (validationDialogResolve) return Promise.resolve(false);
+
+    return new Promise<boolean>((resolve) => {
+      validationDialogResolve = resolve;
+      validationDialog = { issues: visible, actionLabel };
+    });
+  }
+
+  function finishValidationDialog(proceed: boolean) {
+    const resolve = validationDialogResolve;
+    validationDialogResolve = null;
+    validationDialog = null;
+    resolve?.(proceed);
+  }
+
+  function closeValidationDialog() {
+    const first =
+      validationDialog?.issues.find((issue) => issue.status === "error") ??
+      validationDialog?.issues[0];
+    finishValidationDialog(false);
+    const key = first?.key ?? first?.keys[0];
+    if (key) editField(key);
+    else tab = "vars";
+  }
+
+  function locateValidationIssue(key: string) {
+    finishValidationDialog(false);
+    editField(key);
   }
 
   async function exportPdf() {
-    if (!opened) return;
-    const v = validate(opened);
-    if (v) {
-      toastMsg(v);
+    if (!opened || validationDialog) return;
+
+    const issues = await collectValidationIssues();
+    const errors = issues.filter((issue) => issue.status === "error");
+    if (errors.length) {
+      await askValidation(issues);
       return;
     }
+    if (issues.length && !(await askValidation(issues, "仍然导出 PDF"))) return;
+
     const out = await saveDialog({
       defaultPath: `${opened.manifest.name}.pdf`,
       filters: [{ name: "PDF", extensions: ["pdf"] }],
@@ -364,18 +611,24 @@
         opened.projectId,
         out,
       );
-      try {
-        await openWithSystem(path);
-        toastMsg("已生成并打开 PDF");
-      } catch (e) {
-        toastMsg(`已生成 PDF，但打开失败：${e}`);
-      }
+      await rememberTemplateValues();
+      showNotification({
+        tone: "success",
+        title: "PDF 已生成",
+        description: fileName(path),
+        primaryLabel: "打开文件",
+        secondaryLabel: "打开文件夹",
+        onprimary: () => void openGeneratedFile(path),
+        onsecondary: () => void revealGeneratedFile(path),
+        autoDismissMs: 0,
+      });
     } catch (e) {
-      toastMsg(String(e));
+      notifyError("PDF 生成失败", e);
     }
   }
 
   function closeProject() {
+    if (validationDialogResolve) finishValidationDialog(false);
     opened = null;
     projectPath = null;
     dirty = false;
@@ -384,17 +637,22 @@
   }
 
   async function printReport() {
-    if (!opened) return;
-    const v = validate(opened);
-    if (v) {
-      toastMsg(v);
+    if (!opened || validationDialog) return;
+
+    const issues = await collectValidationIssues();
+    const errors = issues.filter((issue) => issue.status === "error");
+    if (errors.length) {
+      await askValidation(issues);
       return;
     }
+    if (issues.length && !(await askValidation(issues, "仍然打印"))) return;
+
     try {
       await api.printReport(opened.templateDir, opened.project.values, opened.projectId);
-      toastMsg("已调用打印");
+      await rememberTemplateValues();
+      notify("已调用打印", "success");
     } catch (e) {
-      toastMsg(String(e));
+      notifyError("打印失败", e);
     }
   }
 
@@ -516,6 +774,10 @@
             templateDir={opened.templateDir}
             projectId={opened.projectId}
             {focusReq}
+            {validation}
+            localIssues={localValidationIssues}
+            onlocalissues={(issues) => (localValidationIssues = issues)}
+            usageVersion={usageVersion}
             onchange={markDirty}
           />
         {:else}
@@ -544,6 +806,17 @@
         预览
       </button>
     </div>
+  {/if}
+
+  {#if validationDialog}
+    <ValidationDialog
+      issues={validationDialog.issues}
+      variables={opened?.manifest.variables ?? []}
+      actionLabel={validationDialog.actionLabel}
+      onlocate={locateValidationIssue}
+      onproceed={() => finishValidationDialog(true)}
+      onclose={closeValidationDialog}
+    />
   {/if}
 
   {#if showNew}
@@ -595,8 +868,20 @@
     />
   {/if}
 
-  {#if toast}
-    <div class="toast">{toast}</div>
+  {#if notification}
+    <div class="notification-host">
+      <GeneralNotification06
+        visible={true}
+        title={notification.title}
+        description={notification.description}
+        tone={notification.tone}
+        primaryLabel={notification.primaryLabel}
+        secondaryLabel={notification.secondaryLabel}
+        onprimary={notification.onprimary}
+        onsecondary={notification.onsecondary}
+        ondismiss={dismissNotification}
+      />
+    </div>
   {/if}
 </div>
 
@@ -672,18 +957,12 @@
     color: #ffffff;
   }
 
-  /* ---------- Toast ---------- */
-  .toast {
+  /* ---------- Notification ---------- */
+  .notification-host {
     position: fixed;
-    left: 50%;
+    right: 24px;
     bottom: 24px;
-    transform: translateX(-50%);
     z-index: 200;
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    background: var(--text);
-    color: #ffffff;
-    font-size: 13px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+    width: min(28rem, calc(100vw - 3rem));
   }
 </style>

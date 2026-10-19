@@ -607,8 +607,31 @@ fn build_page(st: &DevState, query: &str) -> Result<String, String> {
             &format!("{form}<div id=\"rs-pages\">"),
         );
     }
+
+    let validation_boot = if let Some(hook) = st
+        .manifest
+        .hooks
+        .get("validate")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        let resolved = render::resolve_values(&st.manifest, &values)?;
+        let hook_json = serde_json::to_string(hook).map_err(|e| e.to_string())?;
+        let values_json = serde_json::to_string(&resolved)
+            .map_err(|e| e.to_string())?
+            .replace('<', "\\u003c");
+        let variables_json = serde_json::to_string(&st.manifest.variables)
+            .map_err(|e| e.to_string())?
+            .replace('<', "\\u003c");
+        format!(
+            "<script>window.__RS_DEV_VALIDATION__={{hook:{hook_json},values:{values_json},variables:{variables_json}}};</script>{DEV_VALIDATION_JS}"
+        )
+    } else {
+        String::new()
+    };
+
     if let Some(pos) = doc.rfind("</body>") {
-        doc.insert_str(pos, &format!("</div>{LIVERELOAD_JS}"));
+        doc.insert_str(pos, &format!("</div>{LIVERELOAD_JS}{validation_boot}"));
     }
     Ok(doc)
 }
@@ -697,6 +720,266 @@ const LIVERELOAD_JS: &str = r#"<script>
 })();
 </script>"#;
 
+const DEV_VALIDATION_JS: &str = r##"<script>
+(function () {
+  var cfg = window.__RS_DEV_VALIDATION__;
+  if (!cfg || !cfg.hook) return;
+
+  var worker = null;
+  var loading = null;
+  var seq = 0;
+  var latest = 0;
+  var pending = {};
+  var debounce = null;
+  var summary = document.getElementById('rs-val-summary');
+
+  function inputs() {
+    return Array.prototype.slice.call(document.querySelectorAll('[data-rs-field]'));
+  }
+
+  function coerce(type, raw) {
+    if (type === 'number' || type === 'money' || type === 'percent') {
+      return raw === '' ? null : Number(raw);
+    }
+    if (type === 'integer') {
+      return raw === '' ? null : parseInt(raw, 10);
+    }
+    if (type === 'bool') {
+      return raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes';
+    }
+    if (type === 'table' || type === 'images' || type === 'multiselect') {
+      if (!raw.trim()) return [];
+      try { return JSON.parse(raw); } catch (e) { return []; }
+    }
+    return raw;
+  }
+
+  function currentValues() {
+    var values = Object.assign({}, cfg.values || {});
+    inputs().forEach(function (el) {
+      var key = el.getAttribute('data-rs-field');
+      if (!key) return;
+      values[key] = coerce(el.getAttribute('data-rs-type') || 'string', el.value);
+    });
+    return values;
+  }
+
+  function asString(v) { return typeof v === 'string' ? v : undefined; }
+
+  function normStatus(item) {
+    var raw = String((item && (item.status || item.severity)) || '').toLowerCase();
+    if (raw === 'ok' || raw === 'pass' || raw === 'passed' || raw === 'success' || raw === 'valid') return 'ok';
+    if (raw === 'warning' || raw === 'warn') return 'warning';
+    if (raw === 'error' || raw === 'invalid' || raw === 'fail' || raw === 'failed') return 'error';
+    if (item && typeof item.ok === 'boolean') return item.ok ? 'ok' : 'error';
+    if (item && typeof item.valid === 'boolean') return item.valid ? 'ok' : 'error';
+    return 'error';
+  }
+
+  function normalize(raw, fallbackKey) {
+    if (raw === true || raw == null) return [];
+    if (raw === false) return [{ status: 'error', keys: fallbackKey ? [fallbackKey] : [], msg: '校验未通过' }];
+    if (typeof raw === 'string') return [{ status: 'error', keys: fallbackKey ? [fallbackKey] : [], msg: raw }];
+    var items = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.issues) ? raw.issues : [raw]);
+    var out = [];
+    items.forEach(function (item) {
+      if (item == null) return;
+      if (typeof item === 'boolean') {
+        if (!item) out.push({ status: 'error', keys: fallbackKey ? [fallbackKey] : [], msg: '校验未通过' });
+        return;
+      }
+      if (typeof item === 'string') {
+        out.push({ status: 'error', keys: fallbackKey ? [fallbackKey] : [], msg: item });
+        return;
+      }
+      if (typeof item !== 'object') return;
+      var status = normStatus(item);
+      var keys = Array.isArray(item.keys) ? item.keys.filter(function (k) { return typeof k === 'string'; }) : [];
+      var key = asString(item.key) || asString(item.field) || asString(item.fieldKey);
+      if (key && keys.indexOf(key) < 0) keys.unshift(key);
+      if (!keys.length && fallbackKey) keys = [fallbackKey];
+      var msg = asString(item.msg) || asString(item.message) || (status === 'ok' ? '' : (status === 'warning' ? '校验警告' : '校验未通过'));
+      out.push({ status: status, keys: keys, key: key || keys[0], msg: msg });
+    });
+    return out;
+  }
+
+  function fieldEl(key) {
+    var list = inputs();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].getAttribute('data-rs-field') === key) return list[i];
+    }
+    return null;
+  }
+
+  function msgEl(key) {
+    var list = document.querySelectorAll('[data-rs-val]');
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].getAttribute('data-rs-val') === key) return list[i];
+    }
+    return null;
+  }
+
+  function clear() {
+    inputs().forEach(function (el) {
+      el.classList.remove('rs-val-error', 'rs-val-warning', 'rs-val-ok');
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-rs-val]'), function (el) {
+      el.textContent = '';
+      el.className = 'rs-val-msg';
+    });
+    if (summary) {
+      summary.textContent = '';
+      summary.className = 'rs-val-summary';
+    }
+  }
+
+  function apply(issues) {
+    clear();
+    var errors = 0;
+    var warnings = 0;
+    issues.forEach(function (issue) {
+      if (issue.status === 'error') errors++;
+      else if (issue.status === 'warning') warnings++;
+      var keys = issue.keys || [];
+      keys.forEach(function (key) {
+        var el = fieldEl(key);
+        if (el) el.classList.add('rs-val-' + issue.status);
+      });
+      var primary = issue.key || keys[0];
+      if (primary) {
+        var target = msgEl(primary);
+        if (target) {
+          target.textContent = issue.msg || '';
+          target.classList.add(
+            issue.status === 'warning'
+              ? 'rs-val-warning-text'
+              : (issue.status === 'error' ? 'rs-val-error-text' : 'rs-val-ok-text')
+          );
+        }
+      }
+    });
+    if (summary) {
+      if (errors || warnings) {
+        summary.textContent = '错误 ' + errors + ' · 警告 ' + warnings;
+        summary.classList.add(errors ? 'rs-val-error-text' : 'rs-val-warning-text');
+      } else {
+        summary.textContent = '校验通过';
+        summary.classList.add('rs-val-ok-text');
+      }
+    }
+  }
+
+  function fail(message, key) {
+    apply([{ status: 'error', keys: key ? [key] : [], msg: message }]);
+  }
+
+  function onMessage(data) {
+    var id = data.id;
+    var item = pending[id];
+    if (!item) return;
+    delete pending[id];
+    clearTimeout(item.timer);
+    if (id !== latest) return;
+    if (typeof data.error === 'string') {
+      apply([{
+        status: 'error',
+        keys: item.key ? [item.key] : [],
+        msg: '校验脚本执行失败：' + data.error
+      }]);
+    } else {
+      apply(normalize(data.result, item.key));
+    }
+  }
+
+  function ensureWorker() {
+    if (worker) return Promise.resolve(worker);
+    if (loading) return loading;
+    loading = fetch(encodeURI(cfg.hook), { cache: 'no-store' }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.text();
+    }).then(function (source) {
+      var bootstrap = '\nself.onmessage = async function (event) {\n' +
+        '  var data = event.data || {};\n' +
+        '  try {\n' +
+        '    var fn = self.__RS_TEMPLATE_VALIDATE__;\n' +
+        '    if (typeof fn !== "function") throw new Error("未找到校验函数 __RS_TEMPLATE_VALIDATE__");\n' +
+        '    var result = await fn(data.ctx);\n' +
+        '    self.postMessage({ id: data.id, result: result });\n' +
+        '  } catch (err) {\n' +
+        '    self.postMessage({ id: data.id, error: String(err && err.message ? err.message : err) });\n' +
+        '  }\n' +
+        '};\n';
+      var blob = new Blob(['self.window = self;\n', source, bootstrap], { type: 'text/javascript' });
+      var url = URL.createObjectURL(blob);
+      worker = new Worker(url);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      worker.onmessage = function (e) { onMessage(e.data || {}); };
+      worker.onerror = function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        pending = {};
+        fail('校验脚本执行失败');
+        worker = null;
+        loading = null;
+      };
+      return worker;
+    }).catch(function (e) {
+      loading = null;
+      throw e;
+    });
+    return loading;
+  }
+
+  function run(event, key, value) {
+    var id = ++seq;
+    latest = id;
+    var values = currentValues();
+    ensureWorker().then(function (w) {
+      if (!w) return;
+      var timer = setTimeout(function () {
+        if (!pending[id]) return;
+        delete pending[id];
+        if (id !== latest) return;
+        if (worker) worker.terminate();
+        worker = null;
+        loading = null;
+        fail('校验脚本执行超时', key);
+      }, 3000);
+      pending[id] = { timer: timer, key: key };
+      w.postMessage({
+        id: id,
+        ctx: {
+          event: event,
+          key: key,
+          value: value,
+          values: values,
+          rawValues: values,
+          variables: cfg.variables || []
+        }
+      });
+    }).catch(function (e) {
+      fail('校验脚本加载失败：' + e, key);
+    });
+  }
+
+  window.rsValidateExport = function () {
+    run('beforeExport');
+  };
+
+  inputs().forEach(function (el) {
+    el.addEventListener('input', function () {
+      clearTimeout(debounce);
+      var key = el.getAttribute('data-rs-field');
+      debounce = setTimeout(function () {
+        run('change', key, coerce(el.getAttribute('data-rs-type') || 'string', el.value));
+      }, 180);
+    });
+  });
+
+  run('preview');
+})();
+</script>"##;
+
 const DEV_STYLE: &str = r#"<style>
 @media screen{
   html,body{background:#e9ebee}
@@ -731,7 +1014,17 @@ html.rs-panel-open #rs-devpanel{transform:translateX(0)}
 #rs-devpanel label.chk{display:flex;align-items:center;gap:8px;color:#c3c7cc;cursor:pointer}
 #rs-devpanel button.apply{background:#2563eb;border:0;color:#fff;padding:7px;border-radius:6px;cursor:pointer;font:inherit}
 #rs-devpanel button.apply:hover{background:#1d4ed8}
+#rs-devpanel button.rs-val-check{background:#374151;border:0;color:#e6e6e6;padding:7px;border-radius:6px;cursor:pointer;font:inherit}
+#rs-devpanel button.rs-val-check:hover{background:#4b5563}
 #rs-devpanel .hint{color:#6b7078;font-size:11px;text-align:center}
+#rs-devpanel .rs-val-summary{min-height:18px;font-size:11px;line-height:1.5;margin-bottom:8px;color:#6b7078}
+#rs-devpanel .rs-val-msg{font-size:11px;line-height:1.5;min-height:0;color:#8b9099}
+#rs-devpanel .rs-val-error-text{color:#f87171}
+#rs-devpanel .rs-val-warning-text{color:#fbbf24}
+#rs-devpanel .rs-val-ok-text{color:#4ade80}
+#rs-devpanel input.rs-val-error{border-color:#ef4444}
+#rs-devpanel input.rs-val-warning{border-color:#f59e0b}
+#rs-devpanel input.rs-val-ok{border-color:#22c55e}
 body{transition:padding-left .22s ease}
 html.rs-panel-open body{padding-left:300px}
 </style>"#;
@@ -757,6 +1050,7 @@ fn build_form(
         "<form id=\"rs-devpanel\" method=\"get\"><div class=\"hd\">模板开发 <small>共 {} 个变量</small></div><div class=\"bd\">",
         fields.len()
     ));
+    s.push_str("<div id=\"rs-val-summary\" class=\"rs-val-summary\"></div>");
     s.push_str(&format!(
         "<label class=\"fld\"><span>资源目录</span><input type=\"text\" name=\"resourcesDir\" value=\"{}\" placeholder=\"例如 D:\\\\项目\\\\resources\"/><div class=\"hint\" style=\"text-align:left;margin-top:2px\">图片上传会写入此目录；修改后点“应用并刷新”。</div></label>",
         esc_attr(resources_dir)
@@ -775,24 +1069,30 @@ fn build_form(
             let multi = if v.ty == "images" { "1" } else { "0" };
             let multiple = if v.ty == "images" { "multiple" } else { "" };
             s.push_str(&format!(
-                "<label class=\"fld\"><span title=\"{}\">{}</span><input type=\"text\" data-rs-input=\"{}\" name=\"{}\" value=\"{}\" placeholder=\"可填写资源路径，或使用下方上传\"/><div class=\"upl\"><input type=\"file\" accept=\"image/*\" {} data-rs-upload=\"{}\" data-multi=\"{}\" onchange=\"rsUpload(this)\"/><span class=\"upl-status\" data-rs-status=\"{}\"></span></div></label>",
+                "<label class=\"fld\"><span title=\"{}\">{}</span><input type=\"text\" data-rs-input=\"{}\" data-rs-field=\"{}\" data-rs-type=\"{}\" name=\"{}\" value=\"{}\" placeholder=\"可填写资源路径，或使用下方上传\"/><div class=\"upl\"><input type=\"file\" accept=\"image/*\" {} data-rs-upload=\"{}\" data-multi=\"{}\" onchange=\"rsUpload(this)\"/><span class=\"upl-status\" data-rs-status=\"{}\"></span></div><div class=\"rs-val-msg\" data-rs-val=\"{}\"></div></label>",
                 esc_attr(&label),
                 esc(&label),
                 esc_attr(&v.key),
+                esc_attr(&v.key),
+                esc_attr(&v.ty),
                 esc_attr(&v.key),
                 esc_attr(&val),
                 multiple,
                 esc_attr(&v.key),
                 multi,
+                esc_attr(&v.key),
                 esc_attr(&v.key)
             ));
         } else {
             s.push_str(&format!(
-                "<label class=\"fld\"><span title=\"{}\">{}</span><input type=\"text\" name=\"{}\" value=\"{}\"/></label>",
+                "<label class=\"fld\"><span title=\"{}\">{}</span><input type=\"text\" data-rs-field=\"{}\" data-rs-type=\"{}\" name=\"{}\" value=\"{}\"/><div class=\"rs-val-msg\" data-rs-val=\"{}\"></div></label>",
                 esc_attr(&label),
                 esc(&label),
                 esc_attr(&v.key),
-                esc_attr(&val)
+                esc_attr(&v.ty),
+                esc_attr(&v.key),
+                esc_attr(&val),
+                esc_attr(&v.key)
             ));
         }
     }
@@ -801,6 +1101,17 @@ fn build_form(
         "<label class=\"chk\"><input type=\"checkbox\" name=\"annot\" value=\"1\" {}/> 显示字段标记</label>",
         if annot { "checked" } else { "" }
     ));
+    let has_validation_hook = manifest
+        .hooks
+        .get("validate")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if has_validation_hook {
+        s.push_str(
+            "<button class=\"rs-val-check\" type=\"button\" onclick=\"rsValidateExport()\">校验导出</button>",
+        );
+    }
     s.push_str("<button class=\"apply\" type=\"submit\">应用并刷新</button>");
     s.push_str("<div class=\"hint\">改模板文件会自动热重载</div></div></form>");
     s

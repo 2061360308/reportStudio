@@ -24,6 +24,7 @@
 - **实时预览**：编辑变量后即时重渲染，支持打印与 PDF 导出
 - **图片资源变量**：单图 / 多图变量按内容哈希存入工程 `resources/`，随工程自包含
 - **自动续页**：页面标记 `flow` 后，内容超出页框时由排版引擎自动续页
+- **变量校验钩子**：模板可用 Worker 隔离执行校验脚本，输入即时提示，导出前拦截错误
 - **模板开发服务器**：无需启动桌面应用即可调试模板，支持热重载与字段标记
 - **自动更新**：应用与模板分开分发，按版本增量发布
 
@@ -46,6 +47,7 @@ npm run dev:template -- src-tauri/templates/settle-audit-report
 
 ## 文档导航
 
+- [模板编写指南](templates.md)：`manifest.json`、页面函数、资源路径、导出与易错点
 - [发版与自动更新](dev/release.md)：版本规则、GitHub Release、`latest.json` 与脚本说明
 - [文档站与下载按钮](dev/pages.md)：Docsify 文档站结构、下载按钮与 Pages 工作流
 - [GitHub Releases](https://github.com/2061360308/reportStudio/releases)：全部历史版本

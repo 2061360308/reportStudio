@@ -54,6 +54,12 @@ export interface VariableDef {
   max?: number;
 }
 
+export interface TemplateHooks {
+  /** 变量校验钩子文件，相对模板根目录，例如 assets/validate.js */
+  validate?: string;
+  [key: string]: unknown;
+}
+
 export interface TemplateManifest {
   schemaVersion: number;
   id: string;
@@ -66,7 +72,29 @@ export interface TemplateManifest {
   variables: VariableDef[];
   pages?: PageDef[];
   toc?: TocEntry[];
-  hooks?: Record<string, string>;
+  hooks?: TemplateHooks;
+}
+
+export type ValidationStatus = "ok" | "warning" | "error";
+
+export interface ValidationIssue {
+  status: ValidationStatus;
+  /** 受影响字段，多字段联动时全部刷新 */
+  keys: string[];
+  /** 主显示字段；不填时使用 keys[0] */
+  key?: string;
+  msg: string;
+}
+
+export interface HookContext {
+  event: "change" | "preview" | "beforeExport";
+  key?: string;
+  value?: unknown;
+  /** 已解析的完整变量值，含 computed */
+  values: Record<string, unknown>;
+  /** 原始 project.values */
+  rawValues: Record<string, unknown>;
+  variables: VariableDef[];
 }
 
 export interface PageDef {
@@ -92,6 +120,23 @@ export interface TemplateInfo {
   version: string;
   name: string;
   contentHash: string;
+}
+
+export interface RecentValue {
+  value: unknown;
+  usedAt: string;
+}
+
+export interface TemplateUsage {
+  schemaVersion: number;
+  templateId: string;
+  lastUsedAt?: string | null;
+  variables: Record<string, RecentValue[]>;
+}
+
+export interface TemplateUsageSummary {
+  id: string;
+  lastUsedAt?: string | null;
 }
 
 export interface TemplateUpdateInfo {

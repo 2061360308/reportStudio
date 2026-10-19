@@ -76,12 +76,14 @@ npm run dev:template -- src-tauri/templates/settle-audit-report
   "pagesPath": "pages",     // 可选，默认 "pages"
   "variables": [ /* … */ ],
   "pages": [ /* 每页几何与 file */ ],
-  "toc": [ /* … */ ]
+  "toc": [ /* … */ ],
+  "hooks": { "validate": "assets/validate.js" } // 可选，变量校验脚本
 }
 ```
 
 - 页面清单 `pages` 为必填（不再有 `entry` 单页回退）。
 - 模板静态资源（`base.css`、图片等）统一放 `assetsPath` 目录下，页面片段用 `../assets/…` 引用。
+- 变量校验脚本在 Worker 中隔离执行，输入时提示，导出 PDF/打印前拦截错误。详见 [模板编写指南](docs/templates.md)。
 - 内容超出单页的页：在该页加 `"mode": "flow"`（见下）。
 
 ## 图片资源变量（用户上传）

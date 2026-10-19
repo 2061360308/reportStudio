@@ -143,6 +143,7 @@ pub struct TemplateManifest {
     /// 目录（大纲）
     #[serde(default)]
     pub toc: Vec<TocEntry>,
+    /// 生命周期钩子；`validate` 为变量校验脚本路径（相对模板根目录）。
     #[serde(default)]
     pub hooks: Map<String, Value>,
 }

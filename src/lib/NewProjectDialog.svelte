@@ -6,7 +6,11 @@
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import * as api from "./api";
-  import type { OpenedProject, TemplateInfo } from "./types";
+  import type {
+    OpenedProject,
+    TemplateInfo,
+    TemplateUsageSummary,
+  } from "./types";
   import { GeneralDialog17 } from "$lib/components/elements/dialog";
   import { Button } from "$lib/components/elements/button";
   import { GeneralCheckbox01 } from "$lib/components/elements/checkbox";
@@ -106,8 +110,34 @@
     error = "";
     loading = true;
     try {
-      templates = await api.listTemplates();
-      if (templates.length && !selected) selected = templates[0].id;
+      const list = await api.listTemplates();
+      let usage: TemplateUsageSummary[] = [];
+      try {
+        usage = await api.listTemplateUsage();
+      } catch {
+        /* 使用记录不可用时按名称排序 */
+      }
+
+      const lastUsed = new Map(
+        usage.map((item) => [
+          item.id,
+          item.lastUsedAt ? Date.parse(item.lastUsedAt) || 0 : 0,
+        ]),
+      );
+
+      templates = list.sort((a, b) => {
+        const aTime = lastUsed.get(a.id) ?? 0;
+        const bTime = lastUsed.get(b.id) ?? 0;
+        if (aTime !== bTime) return bTime - aTime;
+        return (
+          a.name.localeCompare(b.name, "zh-CN") ||
+          a.id.localeCompare(b.id)
+        );
+      });
+
+      if (!templates.some((template) => template.id === selected)) {
+        selected = templates[0]?.id ?? "";
+      }
     } catch (e) {
       error = String(e);
     } finally {
