@@ -42,7 +42,7 @@ npm run tauri dev
 npm run dev:template -- src-tauri/templates/settle-audit-report
 ```
 
-默认监听 `http://127.0.0.1:1735`，左下角「模板变量」按钮可打开变量面板。
+默认监听 `http://127.0.0.1:1735`，左下角「模板变量」按钮可打开变量面板；可在面板中配置资源目录，并直接上传 `image` / `images` 变量图片。
 
 ## 文档导航
 

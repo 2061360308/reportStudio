@@ -12,7 +12,7 @@ use tauri::{AppHandle, State};
 use zip::write::SimpleFileOptions;
 
 /// 允许上传的资源扩展名（后端安全白名单；模板 accept 仅约束前端选择）。
-const ALLOWED_EXT: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp", "gif", "pdf"];
+const ALLOWED_EXT: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp", "gif"];
 
 /// 一次挂载会话：暴露给 `report` 协议的模板目录 + 工程资源目录 + 渲染上下文。
 pub struct Mount {
@@ -28,8 +28,34 @@ pub struct AppPaths {
     /// 工程内嵌模板快照（数据目录，避免依赖安装目录或缓存目录）。
     pub embedded_templates_dir: PathBuf,
     pub mounts: Mutex<HashMap<String, Mount>>,
+    /// 供系统打印窗口加载的临时合并 PDF。
+    pub generated_pdfs: Mutex<HashMap<String, PathBuf>>,
     /// 模板同步/安装串行锁，避免并发覆盖同一目录。
     pub template_sync: std::sync::atomic::AtomicBool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    pub os: String,
+    pub arch: String,
+    pub templates_dir: String,
+    pub renders_dir: String,
+    pub embedded_templates_dir: String,
+}
+
+#[tauri::command]
+pub fn get_app_info(state: State<AppPaths>) -> AppInfo {
+    AppInfo {
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        templates_dir: state.templates_dir.to_string_lossy().to_string(),
+        renders_dir: state.renders_dir.to_string_lossy().to_string(),
+        embedded_templates_dir: state
+            .embedded_templates_dir
+            .to_string_lossy()
+            .to_string(),
+    }
 }
 
 fn now() -> String {
@@ -60,10 +86,6 @@ fn mount_root_url(id: &str) -> String {
 fn pages_base_url(id: &str, manifest: &TemplateManifest) -> String {
     format!("http://report.localhost/m/{id}/{}/", manifest.pages_path())
 }
-fn mount_url(id: &str, rel: &str) -> String {
-    format!("http://report.localhost/m/{id}/{rel}")
-}
-
 /// 确保存在挂载会话，并写入最新渲染上下文（已解析 + 资源链接改写）。返回 (id, manifest)。
 fn ensure_mount(
     state: &AppPaths,
@@ -279,7 +301,50 @@ pub fn remove_resource(
     Ok(())
 }
 
-/// 进程内 WebView2 PrintToPdf（通过协议虚拟路由 m/<id>/__print.html）。
+/// 按 manifest 逐页打印，并按页面顺序合并为一个 PDF。
+pub(crate) fn build_pdf(
+    app: &AppHandle,
+    mount_id: &str,
+    manifest: &TemplateManifest,
+    temp_root: &Path,
+    out: &Path,
+) -> Result<(), String> {
+    if manifest.pages.is_empty() {
+        return Err("模板未定义 pages".to_string());
+    }
+
+    let result = (|| -> Result<(), String> {
+        fs::create_dir_all(temp_root).map_err(|e| e.to_string())?;
+        let mut page_files: Vec<PathBuf> = Vec::with_capacity(manifest.pages.len());
+
+        for (index, page) in manifest.pages.iter().enumerate() {
+            let url = format!(
+                "http://report.localhost/m/{mount_id}/__print_page/{index}.html"
+            );
+            let (width_mm, height_mm) = render::page_size_mm(page);
+            let landscape = page
+                .orientation
+                .as_deref()
+                .map(|v| v.eq_ignore_ascii_case("landscape"))
+                .unwrap_or(false);
+            let print_page = pdf::PrintPage {
+                width_in: width_mm / 25.4,
+                height_in: height_mm / 25.4,
+                landscape,
+            };
+            let page_file = temp_root.join(format!("page-{index}.pdf"));
+            pdf::print_via_webview(app, &url, &page_file, Some(print_page))?;
+            page_files.push(page_file);
+        }
+
+        pdf::merge_pdfs(&page_files, out)
+    })();
+
+    let _ = fs::remove_dir_all(temp_root);
+    result
+}
+
+/// 进程内 WebView2 PrintToPdf：逐页设置纸张尺寸后合并。
 #[tauri::command]
 pub async fn generate_pdf(
     app: AppHandle,
@@ -289,24 +354,24 @@ pub async fn generate_pdf(
     project_id: Option<String>,
     out_path: String,
 ) -> Result<String, String> {
-    let (id, _) = ensure_mount(
+    let (id, manifest) = ensure_mount(
         &state,
         &template_dir,
         &values,
         project_id.as_deref().unwrap_or(""),
     )?;
-    let url = mount_url(&id, "__print.html");
     let out = PathBuf::from(out_path);
 
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        pdf::print_via_webview(&app, &url, &out)?;
+        let temp = std::env::temp_dir().join(format!("rs-pdf-{}", uuid::Uuid::new_v4()));
+        build_pdf(&app, &id, &manifest, &temp, &out)?;
         Ok(out.to_string_lossy().to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// 打印：渲染报告后用 WebView2 系统打印对话框打印（可选打印机/参数）。
+/// 打印：生成与“输出为 PDF”相同尺寸的合并 PDF，再交给系统打印对话框。
 #[tauri::command]
 pub async fn print_report(
     app: AppHandle,
@@ -315,13 +380,41 @@ pub async fn print_report(
     values: Map<String, Value>,
     project_id: Option<String>,
 ) -> Result<(), String> {
-    let (id, _) = ensure_mount(
+    let (id, manifest) = ensure_mount(
         &state,
         &template_dir,
         &values,
         project_id.as_deref().unwrap_or(""),
     )?;
-    let url = mount_url(&id, "__print.html");
+
+    let token = uuid::Uuid::new_v4().to_string();
+    let print_dir = state.renders_dir.join("print");
+    fs::create_dir_all(&print_dir).map_err(|e| e.to_string())?;
+    let pdf_path = print_dir.join(format!("{token}.pdf"));
+
+    let app_for_build = app.clone();
+    let id_for_build = id.clone();
+    let manifest_for_build = manifest.clone();
+    let pdf_for_build = pdf_path.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let temp = std::env::temp_dir().join(format!("rs-pdf-{}", uuid::Uuid::new_v4()));
+        build_pdf(
+            &app_for_build,
+            &id_for_build,
+            &manifest_for_build,
+            &temp,
+            &pdf_for_build,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    state
+        .generated_pdfs
+        .lock()
+        .unwrap()
+        .insert(token.clone(), pdf_path);
+    let url = format!("http://report.localhost/__pdf/{token}");
 
     tauri::async_runtime::spawn_blocking(move || pdf::print_via_webview_dialog(&app, &url))
         .await

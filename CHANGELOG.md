@@ -1,5 +1,29 @@
 # 更新日志
 
+## 0.2.0
+
+- feat: PDF 输出改为按 manifest 页面逐页设置纸张尺寸/方向，并合并为单个 PDF
+- feat: 修复 PDF 输出纸张为 Letter、页边距不一致的问题，统一按模板页面尺寸输出 A4
+- feat: PDF 输出支持 flow 页面自动续页和纵向/横向页面混排
+- feat: “打印…”改为使用与“输出为 PDF”相同的合并 PDF，并调起系统打印对话框
+- feat: 新增单页打印渲染和临时 PDF 协议路由，修复打印文档模板 CSS 不加载的问题
+- feat: report-dev 新增 `--resources` 参数和侧边栏资源目录配置
+- feat: report-dev 支持 image/images 变量直接上传图片，并提供工程资源访问
+- feat: 图片变量编辑器重做：单图放大、多图堆叠预览、缩略图列表、拖拽排序、删除和放大查看
+- feat: 新增 ButtonGroup、ImageGalleryDialog、ImageLightbox 组件
+- feat: 图片变量新增“添加/重置”操作，重置可恢复模板默认值
+- feat: 移除 PDF 作为图片变量上传类型，仅保留图片格式
+- fix: 修复 PDF 单页打印路由 base href 错误导致模板样式失效的问题
+- fix: 修复 report-dev 图片变量无法保存为数组的问题
+- chore: 新增 lopdf 依赖用于合并逐页 PDF
+- feat: 新增完整“关于报告工坊”弹窗，展示版本、环境、模板、数据目录和诊断信息
+- feat: 关于弹窗支持打开 GitHub、文档、Releases、问题反馈及模板目录
+- feat: 导出 PDF 成功后自动用系统默认程序打开
+- feat: 软件更新与模板更新改为一次性并发检查，并汇总到统一更新对话框
+- feat: 更新对话框支持直接安装应用更新和同步模板更新
+- feat: 新增 opener 插件和 `get_app_info` 命令
+- fix: 关于弹窗改用 `src-tauri/icons` 中的应用图标，并移除静态图标依赖
+
 ## 0.1.3
 
 - feat: 重新设计新建工程弹窗，支持模板列表、目录选择与固定文件名

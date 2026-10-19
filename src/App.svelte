@@ -3,6 +3,7 @@
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { openPath as openWithSystem } from "@tauri-apps/plugin-opener";
   import type { Update } from "@tauri-apps/plugin-updater";
   import * as api from "$lib/api";
   import * as Menubar from "$lib/components/elements/menubar";
@@ -10,8 +11,8 @@
   import Editor from "$lib/Editor.svelte";
   import Preview from "$lib/Preview.svelte";
   import NewProjectDialog from "$lib/NewProjectDialog.svelte";
-  import UpdateDialog from "$lib/UpdateDialog.svelte";
-  import TemplateUpdateDialog from "$lib/TemplateUpdateDialog.svelte";
+  import AboutDialog from "$lib/AboutDialog.svelte";
+  import UpdatesDialog from "$lib/UpdatesDialog.svelte";
   import TemplateSyncOverlay from "$lib/TemplateSyncOverlay.svelte";
   import {
     checkAppUpdate,
@@ -44,6 +45,10 @@
   let focusReq = $state<{ key: string; n: number } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
+  let showAbout = $state(false);
+  let updatesOpen = $state(false);
+  let updatesChecking = $state(false);
+
   let appVersion = $state("");
   let appUpdate = $state<Update | null>(null);
   let appInstalling = $state(false);
@@ -51,7 +56,6 @@
   let appError = $state("");
 
   let templateUpdates = $state<TemplateUpdateInfo[]>([]);
-  let showTemplateUpdates = $state(false);
   let templateSyncing = $state(false);
   let templatePercent = $state(0);
   let templateError = $state("");
@@ -136,21 +140,8 @@
       await syncTemplatesNow(true);
     }
 
-    await checkForAppUpdate(false);
-
-    // 应用更新优先；避免两个更新弹窗同时出现，模板更新留到下次启动。
-    if (appUpdate) return;
-
-    if (templates.length > 0) {
-      try {
-        const updates = await findTemplateUpdates();
-        if (updates.length) {
-          templateUpdates = updates;
-          showTemplateUpdates = true;
-        }
-      } catch {
-        // 静默检查失败不打扰用户
-      }
+    if (!showFirstRunSync) {
+      await checkAllUpdates(false);
     }
   }
 
@@ -172,7 +163,6 @@
       });
       templatesRefreshKey += 1;
       showFirstRunSync = false;
-      showTemplateUpdates = false;
       templateUpdates = [];
       toastMsg(firstRun ? "模板准备完成" : "模板已更新");
     } catch (e) {
@@ -183,51 +173,47 @@
     }
   }
 
-  async function checkForAppUpdate(manual: boolean) {
+  async function checkAllUpdates(manual = true) {
+    if (updatesChecking || appInstalling || templateSyncing) return;
+    updatesChecking = true;
+    appError = "";
+    templateError = "";
+    appUpdate = null;
+    templateUpdates = [];
+    if (manual) updatesOpen = true;
+
     try {
-      const update = await checkAppUpdate(manual);
-      if (update) {
-        appUpdate = update;
-        appError = "";
-      } else if (manual) {
-        toastMsg("应用已是最新版本");
+      const [appResult, templateResult] = await Promise.allSettled([
+        checkAppUpdate(manual),
+        findTemplateUpdates(),
+      ]);
+
+      if (appResult.status === "fulfilled") {
+        appUpdate = appResult.value;
+      } else {
+        appError = String(appResult.reason);
       }
-    } catch (e) {
-      if (manual) toastMsg(`检查更新失败：${e}`);
+
+      if (templateResult.status === "fulfilled") {
+        templateUpdates = templateResult.value;
+      } else {
+        templateError = String(templateResult.reason);
+      }
+
+      if (!manual && (appUpdate || templateUpdates.length > 0)) {
+        updatesOpen = true;
+      }
+    } finally {
+      updatesChecking = false;
     }
   }
 
-  async function manualCheckAll() {
-    const messages: string[] = [];
-    let appFound = false;
-
-    try {
-      const update = await checkAppUpdate(true);
-      if (update) {
-        appUpdate = update;
-        appFound = true;
-      } else {
-        messages.push("应用已是最新");
-      }
-    } catch (e) {
-      messages.push(`应用检查失败：${e}`);
+  function openUpdates() {
+    if (appUpdate || templateUpdates.length > 0) {
+      updatesOpen = true;
+    } else {
+      void checkAllUpdates(true);
     }
-
-    try {
-      const updates = await findTemplateUpdates();
-      if (updates.length && !appFound) {
-        templateUpdates = updates;
-        showTemplateUpdates = true;
-      } else if (updates.length) {
-        messages.push(`${updates.length} 个模板更新将在应用更新后同步`);
-      } else {
-        messages.push("模板已是最新");
-      }
-    } catch (e) {
-      messages.push(`模板检查失败：${e}`);
-    }
-
-    if (messages.length) toastMsg(messages.join("；"));
   }
 
   async function installUpdate() {
@@ -250,6 +236,7 @@
     skipVersion(appUpdate.version);
     appUpdate = null;
     appInstalling = false;
+    appError = "";
   }
 
   /* ---------------- 文件 ---------------- */
@@ -371,8 +358,18 @@
     });
     if (typeof out !== "string") return;
     try {
-      await api.generatePdf(opened.templateDir, opened.project.values, opened.projectId, out);
-      toastMsg("已生成 PDF");
+      const path = await api.generatePdf(
+        opened.templateDir,
+        opened.project.values,
+        opened.projectId,
+        out,
+      );
+      try {
+        await openWithSystem(path);
+        toastMsg("已生成并打开 PDF");
+      } catch (e) {
+        toastMsg(`已生成 PDF，但打开失败：${e}`);
+      }
     } catch (e) {
       toastMsg(String(e));
     }
@@ -497,11 +494,11 @@
       <Menubar.Menu>
         <Menubar.Trigger>帮助</Menubar.Trigger>
         <Menubar.Content>
-          <Menubar.Item onSelect={manualCheckAll}>检查更新</Menubar.Item>
+          <Menubar.Item onSelect={() => checkAllUpdates(true)}>
+            检查更新
+          </Menubar.Item>
           <Menubar.Separator />
-          <Menubar.Item
-            onSelect={() => toastMsg(appVersion ? `报告工坊 v${appVersion}` : "报告工坊")}
-          >
+          <Menubar.Item onSelect={() => (showAbout = true)}>
             关于报告工坊
           </Menubar.Item>
         </Menubar.Content>
@@ -559,27 +556,32 @@
     {/key}
   {/if}
 
-  {#if appUpdate}
-    <UpdateDialog
-      version={appUpdate.version}
-      notes={appUpdate.body ?? ""}
-      installing={appInstalling}
-      percent={appPercent}
-      error={appError}
+  {#if updatesOpen}
+    <UpdatesDialog
+      bind:open={updatesOpen}
+      checking={updatesChecking}
+      appUpdate={appUpdate}
+      appInstalling={appInstalling}
+      appPercent={appPercent}
+      appError={appError}
+      templateUpdates={templateUpdates}
+      templateSyncing={templateSyncing}
+      templatePercent={templatePercent}
+      templateError={templateError}
       oninstall={installUpdate}
-      onlater={() => (appUpdate = null)}
       onskip={skipAppUpdate}
+      onsync={() => syncTemplatesNow(false)}
+      onrecheck={() => checkAllUpdates(true)}
+      onclose={() => (updatesOpen = false)}
     />
   {/if}
 
-  {#if showTemplateUpdates && !showFirstRunSync}
-    <TemplateUpdateDialog
-      updates={templateUpdates}
-      busy={templateSyncing}
-      progress={templatePercent}
-      error={templateError}
-      onupdate={() => syncTemplatesNow(false)}
-      onlater={() => (showTemplateUpdates = false)}
+  {#if showAbout}
+    <AboutDialog
+      bind:open={showAbout}
+      version={appVersion}
+      hasUpdates={!!appUpdate || templateUpdates.length > 0}
+      oncheckupdates={openUpdates}
     />
   {/if}
 

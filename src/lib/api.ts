@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
 import type {
+  AppInfo,
   OpenedProject,
   PreviewPage,
   Project,
@@ -9,6 +10,8 @@ import type {
   TemplateSyncEvent,
   TemplateUpdateInfo,
 } from "./types";
+
+export const getAppInfo = () => invoke<AppInfo>("get_app_info");
 
 export const listTemplates = () => invoke<TemplateInfo[]>("list_templates");
 

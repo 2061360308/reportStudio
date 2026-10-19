@@ -9,6 +9,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::Manager;
 
+fn parse_byte_range(header: &str, total: usize) -> Option<(usize, usize)> {
+    let value = header.strip_prefix("bytes=")?;
+    let (start, end) = value.split_once('-')?;
+    let start = start.trim().parse::<usize>().ok()?;
+    let end = if end.trim().is_empty() {
+        total.saturating_sub(1)
+    } else {
+        end.trim().parse::<usize>().ok()?
+    };
+    if total == 0 || start > end || start >= total {
+        return None;
+    }
+    Some((start, end.min(total - 1)))
+}
+
 fn copy_dir_all(src: &Path, dest: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dest)?;
     for entry in fs::read_dir(src)? {
@@ -188,6 +203,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .register_uri_scheme_protocol("report", |ctx, req| {
             let not_found = || {
@@ -198,9 +214,48 @@ pub fn run() {
             };
             let state = ctx.app_handle().state::<commands::AppPaths>();
             let path = req.uri().path().to_string();
+            let range = req
+                .headers()
+                .get("range")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
             let decoded = percent_encoding::percent_decode_str(path.trim_start_matches('/'))
                 .decode_utf8_lossy()
                 .to_string();
+
+            // 临时合并 PDF：供系统打印窗口加载
+            if let Some(token) = decoded.strip_prefix("__pdf/") {
+                let file = state
+                    .generated_pdfs
+                    .lock()
+                    .unwrap()
+                    .get(token)
+                    .cloned();
+                return match file.and_then(|p| fs::read(p).ok()) {
+                    Some(bytes) => {
+                        let total = bytes.len();
+                        let mut builder = tauri::http::Response::builder()
+                            .header("Content-Type", "application/pdf")
+                            .header("Accept-Ranges", "bytes")
+                            .header("Content-Disposition", "inline; filename=\"report.pdf\"");
+                        if let Some((start, end)) = range
+                            .as_deref()
+                            .and_then(|value| parse_byte_range(value, total))
+                        {
+                            builder = builder
+                                .status(206)
+                                .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+                                .header("Content-Length", (end - start + 1).to_string());
+                            return builder
+                                .body(bytes[start..=end].to_vec())
+                                .unwrap();
+                        }
+                        builder.body(bytes).unwrap()
+                    }
+                    None => not_found(),
+                };
+            }
+
             // 期望路由：m/<mountId>/<rest>
             let (id, rest) = match decoded.strip_prefix("m/").and_then(|s| s.split_once('/')) {
                 Some((id, rest)) => (id.to_string(), rest.to_string()),
@@ -218,6 +273,51 @@ pub fn run() {
                 return match ctx2 {
                     Some((tdir, manifest, values)) => {
                         match render::render_print_html(&tdir, &manifest, &values) {
+                            Ok(html) => tauri::http::Response::builder()
+                                .header("Content-Type", "text/html; charset=utf-8")
+                                .body(html.into_bytes())
+                                .unwrap(),
+                            Err(e) => tauri::http::Response::builder()
+                                .status(500)
+                                .body(e.into_bytes())
+                                .unwrap(),
+                        }
+                    }
+                    None => not_found(),
+                };
+            }
+
+            // 单页打印文档：按 manifest 页面顺序取 index
+            if let Some(index_str) = rest
+                .strip_prefix("__print_page/")
+                .and_then(|s| s.strip_suffix(".html"))
+            {
+                let index = match index_str.parse::<usize>() {
+                    Ok(n) => n,
+                    Err(_) => return not_found(),
+                };
+                let ctx2 = {
+                    let mounts = state.mounts.lock().unwrap();
+                    mounts.get(&id).map(|m| {
+                        (m.template_dir.clone(), m.manifest.clone(), m.render_values.clone())
+                    })
+                };
+                return match ctx2 {
+                    Some((tdir, manifest, values)) => {
+                        let Some(page) = manifest.pages.get(index).cloned() else {
+                            return not_found();
+                        };
+                        let base_href = format!(
+                            "http://report.localhost/m/{id}/{}/",
+                            manifest.pages_path()
+                        );
+                        match render::render_print_page_html(
+                            &tdir,
+                            &manifest,
+                            &values,
+                            &page,
+                            &base_href,
+                        ) {
                             Ok(html) => tauri::http::Response::builder()
                                 .header("Content-Type", "text/html; charset=utf-8")
                                 .body(html.into_bytes())
@@ -308,10 +408,14 @@ pub fn run() {
                 }
             }
 
-            // 清理上一会话遗留的工程工作目录（资源工作区）
+            // 清理上一会话遗留的工程工作目录（资源工作区）和临时打印 PDF
             let work = renders_dir.join("work");
             if work.exists() {
                 let _ = fs::remove_dir_all(&work);
+            }
+            let print_tmp = renders_dir.join("print");
+            if print_tmp.exists() {
+                let _ = fs::remove_dir_all(&print_tmp);
             }
 
             app.manage(commands::AppPaths {
@@ -319,6 +423,7 @@ pub fn run() {
                 renders_dir,
                 embedded_templates_dir,
                 mounts: Mutex::new(HashMap::new()),
+                generated_pdfs: Mutex::new(HashMap::new()),
                 template_sync: std::sync::atomic::AtomicBool::new(false),
             });
 
@@ -339,6 +444,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_app_info,
             commands::list_templates,
             commands::get_manifest,
             commands::install_template,
@@ -363,10 +469,20 @@ pub fn run() {
 fn self_test(handle: &tauri::AppHandle) -> Result<String, String> {
     use tauri::Manager;
     let state = handle.state::<commands::AppPaths>();
-    let tdir = state.templates_dir.join("settle-audit-report");
+    let template_id = std::env::var("RS_SELFTEST_TEMPLATE")
+        .unwrap_or_else(|_| "settle-audit-report".to_string());
+    let tdir = state.templates_dir.join(template_id);
     let manifest = templates::read_manifest(&tdir)?;
 
-    let values = serde_json::Map::new();
+    let values: serde_json::Map<String, serde_json::Value> =
+        if let Ok(path) = std::env::var("RS_SELFTEST_VALUES") {
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("读取 RS_SELFTEST_VALUES 失败：{e}"))?;
+            serde_json::from_str(&text)
+                .map_err(|e| format!("解析 RS_SELFTEST_VALUES 失败：{e}"))?
+        } else {
+            serde_json::Map::new()
+        };
 
     // 注册一个挂载会话（__print.html 由协议现场生成）
     let project_id = format!("selftest-{}", uuid::Uuid::new_v4());
@@ -413,12 +529,19 @@ fn self_test(handle: &tauri::AppHandle) -> Result<String, String> {
 
     let out = std::env::temp_dir().join("rs-selftest.pdf");
     let _ = std::fs::remove_file(&out);
-    pdf::print_via_webview(handle, &url, &out)?;
+    let temp = std::env::temp_dir().join(format!(
+        "rs-selftest-pages-{}",
+        uuid::Uuid::new_v4()
+    ));
+    commands::build_pdf(handle, &project_id, &manifest, &temp, &out)?;
     let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
     if size == 0 {
         return Err("PDF 为空".to_string());
     }
-    Ok(format!("size={size} preview={preview_ok}"))
+    let pages = lopdf::Document::load(&out)
+        .map(|doc| doc.get_pages().len())
+        .unwrap_or(0);
+    Ok(format!("size={size} pages={pages} preview={preview_ok}"))
 }
 
 #[cfg(test)]

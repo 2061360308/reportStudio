@@ -2,7 +2,7 @@
 //! 仅开发期使用，不属于桌面应用，也不会被打包。
 //!
 //! 用法：
-//!   report-dev <模板目录> [--port 1735] [--values values.json]
+//!   report-dev <模板目录> [--port 1735] [--values values.json] [--resources <资源目录>]
 
 use report_core::model::TemplateManifest;
 use report_core::render;
@@ -14,14 +14,19 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+const RESOURCE_EXT: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp", "gif"];
+const MAX_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
 
 struct DevState {
     template_dir: PathBuf,
     manifest: TemplateManifest,
     base_values: Map<String, Value>,
     base_sample_keys: HashSet<String>,
+    /// 工程资源目录；可通过 --resources 或侧边栏配置
+    resources_dir: Mutex<PathBuf>,
     /// 服务器根地址（http://127.0.0.1:<port>/），用于把资源值改写为绝对 URL
     base_url: String,
 }
@@ -36,6 +41,7 @@ fn main() {
     let mut dir: Option<String> = None;
     let mut port: u16 = 1735;
     let mut values_file: Option<String> = None;
+    let mut resources: Option<String> = None;
 
     let mut args = argv.into_iter();
     while let Some(a) = args.next() {
@@ -46,6 +52,7 @@ fn main() {
                 }
             }
             "--values" | "-v" => values_file = args.next(),
+            "--resources" | "-r" => resources = args.next(),
             "-h" | "--help" => {
                 print_help();
                 return;
@@ -77,6 +84,7 @@ fn main() {
     }
 
     let (base_values, base_sample_keys) = load_values(&manifest, values_file.as_deref());
+    let resources_dir = PathBuf::from(resources.unwrap_or_default());
 
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -87,6 +95,14 @@ fn main() {
     println!("模板开发服务器已启动：");
     println!("  地址：http://127.0.0.1:{}", addr.port());
     println!("  模板：{}", template_dir.display());
+    println!(
+        "  资源：{}",
+        if resources_dir.as_os_str().is_empty() {
+            "未配置（可在侧边栏资源目录中设置）"
+        } else {
+            resources_dir.to_str().unwrap_or("")
+        }
+    );
     println!(
         "  变量：默认取自 manifest.sample{}",
         if values_file.is_some() {
@@ -108,6 +124,7 @@ fn main() {
         manifest,
         base_values,
         base_sample_keys,
+        resources_dir: Mutex::new(resources_dir),
         base_url: format!("http://127.0.0.1:{}/", addr.port()),
     });
 
@@ -289,7 +306,7 @@ fn pack_usage() {
 
 fn print_help() {
     eprintln!(
-        "模板开发服务器\n\n用法:\n  report-dev <模板目录> [--port 1735] [--values values.json]\n\n参数:\n  --port, -p    监听端口（默认 1735，占用时自动挑空闲端口）\n  --values, -v  可选：JSON 变量文件（覆盖 sample 值）\n"
+        "模板开发服务器\n\n用法:\n  report-dev <模板目录> [--port 1735] [--values values.json] [--resources <资源目录>]\n\n参数:\n  --port, -p       监听端口（默认 1735，占用时自动挑空闲端口）\n  --values, -v     可选：JSON 变量文件（覆盖 sample 值）\n  --resources, -r  可选：图片资源目录（也可在侧边栏中配置）\n"
     );
 }
 
@@ -328,15 +345,81 @@ fn load_values(
 }
 
 fn handle(mut stream: TcpStream, st: &DevState) -> std::io::Result<()> {
-    let req = read_request(&mut stream)?;
-    let first = req.lines().next().unwrap_or("");
+    let (head, body) = read_http_request(&mut stream)?;
+    let first = head.lines().next().unwrap_or("");
     let mut parts = first.split_whitespace();
-    let _method = parts.next().unwrap_or("GET");
+    let method = parts.next().unwrap_or("GET");
     let target = parts.next().unwrap_or("/");
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p, q),
         None => (target, ""),
     };
+
+    if path == "/__upload" {
+        if method != "POST" {
+            return respond_json_error(&mut stream, "405 Method Not Allowed", "仅支持 POST");
+        }
+
+        let pairs = parse_query(query);
+        if let Some((_, dir)) = pairs.iter().find(|(k, _)| k == "dir") {
+            *st.resources_dir.lock().unwrap() = PathBuf::from(dir);
+        }
+
+        let filename = pairs
+            .iter()
+            .find(|(k, _)| k == "filename")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let ext = Path::new(&filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !RESOURCE_EXT.contains(&ext.as_str()) {
+            return respond_json_error(
+                &mut stream,
+                "400 Bad Request",
+                "仅支持 png/jpg/jpeg/bmp/webp/gif 图片",
+            );
+        }
+        if body.is_empty() {
+            return respond_json_error(&mut stream, "400 Bad Request", "上传内容为空");
+        }
+
+        let dir = st.resources_dir.lock().unwrap().clone();
+        if dir.as_os_str().is_empty() {
+            return respond_json_error(&mut stream, "400 Bad Request", "请先在侧边栏配置资源目录");
+        }
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return respond_json_error(
+                &mut stream,
+                "500 Internal Server Error",
+                &format!("创建资源目录失败：{e}"),
+            );
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(&body);
+        let hash = hex::encode(hasher.finalize());
+        let name = format!("{}.{}", &hash[..8], ext);
+        let path_file = dir.join(&name);
+        if !path_file.exists() {
+            if let Err(e) = std::fs::write(&path_file, &body) {
+                return respond_json_error(
+                    &mut stream,
+                    "500 Internal Server Error",
+                    &format!("写入资源失败：{e}"),
+                );
+            }
+        }
+        let payload = serde_json::json!({ "name": format!("resources/{name}") }).to_string();
+        return respond(
+            &mut stream,
+            "200 OK",
+            "application/json; charset=utf-8",
+            payload.as_bytes(),
+        );
+    }
 
     if path == "/__ver" {
         let v = fingerprint(&st.template_dir);
@@ -365,14 +448,26 @@ fn handle(mut stream: TcpStream, st: &DevState) -> std::io::Result<()> {
         };
     }
 
-    // 其余任何路径都尝试作为模板目录下的静态资源（assets/pages/media 等）
+    // 其余路径：模板静态资源，或 resources/ 下的工程资源
     let rel = percent_decode(path.trim_start_matches('/'));
     if !rel.is_empty() && !rel.contains("..") {
-        let full = st.template_dir.join(&rel);
-        let root = st
-            .template_dir
-            .canonicalize()
-            .unwrap_or_else(|_| st.template_dir.clone());
+        let (base, rel_path) = if let Some(res_rel) = rel.strip_prefix("resources/") {
+            let dir = st.resources_dir.lock().unwrap().clone();
+            if dir.as_os_str().is_empty() {
+                return respond(
+                    &mut stream,
+                    "404 Not Found",
+                    "text/plain; charset=utf-8",
+                    b"resources dir is not configured",
+                );
+            }
+            (dir, res_rel.to_string())
+        } else {
+            (st.template_dir.clone(), rel.clone())
+        };
+
+        let full = base.join(&rel_path);
+        let root = base.canonicalize().unwrap_or_else(|_| base.clone());
         if let Ok(cp) = full.canonicalize() {
             if cp.starts_with(&root) {
                 if let Ok(bytes) = std::fs::read(&cp) {
@@ -390,21 +485,71 @@ fn handle(mut stream: TcpStream, st: &DevState) -> std::io::Result<()> {
     )
 }
 
-fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+fn read_http_request(stream: &mut TcpStream) -> std::io::Result<(String, Vec<u8>)> {
+    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
     let mut buf: Vec<u8> = Vec::new();
-    let mut tmp = [0u8; 2048];
-    loop {
+    let mut tmp = [0u8; 8192];
+    let mut header_end: Option<usize> = None;
+
+    while header_end.is_none() && buf.len() <= 64 * 1024 {
         let n = stream.read(&mut tmp)?;
         if n == 0 {
             break;
         }
         buf.extend_from_slice(&tmp[..n]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 65536 {
-            break;
+        if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
+            header_end = Some(pos + 4);
         }
     }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+
+    let end = header_end.unwrap_or(buf.len());
+    let head = String::from_utf8_lossy(&buf[..end]).into_owned();
+    let content_length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
+    if content_length > MAX_UPLOAD_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "请求体过大",
+        ));
+    }
+
+    let mut body = buf.get(end..).map(|s| s.to_vec()).unwrap_or_default();
+    while body.len() < content_length {
+        let n = stream.read(&mut tmp)?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&tmp[..n]);
+    }
+    body.truncate(content_length);
+    Ok((head, body))
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn respond_json_error(stream: &mut TcpStream, status: &str, message: &str) -> std::io::Result<()> {
+    let body = serde_json::json!({ "error": message }).to_string();
+    respond(
+        stream,
+        status,
+        "application/json; charset=utf-8",
+        body.as_bytes(),
+    )
 }
 
 fn respond(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) -> std::io::Result<()> {
@@ -425,8 +570,14 @@ fn build_page(st: &DevState, query: &str) -> Result<String, String> {
 
     let mut values = st.base_values.clone();
     let mut sample_keys = st.base_sample_keys.clone();
+    let mut resources_dir = st.resources_dir.lock().unwrap().clone();
     for (k, v) in &pairs {
         if k == "annot" {
+            continue;
+        }
+        if k == "resourcesDir" {
+            resources_dir = PathBuf::from(v);
+            *st.resources_dir.lock().unwrap() = resources_dir.clone();
             continue;
         }
         if let Some(def) = st.manifest.variables.iter().find(|x| &x.key == k) {
@@ -444,7 +595,12 @@ fn build_page(st: &DevState, query: &str) -> Result<String, String> {
     if let Some(pos) = doc.find("</head>") {
         doc.insert_str(pos, &format!("<style>\n{}</style>", render::PREVIEW_CSS));
     }
-    let form = build_form(&st.manifest, &values, annot);
+    let form = build_form(
+        &st.manifest,
+        &values,
+        annot,
+        resources_dir.to_str().unwrap_or(""),
+    );
     if let Some(pos) = doc.find("<body>") {
         doc.insert_str(
             pos + "<body>".len(),
@@ -489,6 +645,49 @@ const LIVERELOAD_JS: &str = r#"<script>
     else if (e.key === '-' || e.key === '_') { e.preventDefault(); window.rsSetZoom(z / 1.1); }
     else if (e.key === '0') { e.preventDefault(); window.rsSetZoom(1); }
   });
+  window.rsUpload = function (input) {
+    var key = input.getAttribute('data-rs-upload');
+    var multi = input.getAttribute('data-multi') === '1';
+    var valueInput = document.querySelector('[data-rs-input="' + key + '"]');
+    var status = document.querySelector('[data-rs-status="' + key + '"]');
+    var dirInput = document.querySelector('#rs-devpanel input[name="resourcesDir"]');
+    var files = Array.prototype.slice.call(input.files || []);
+    input.value = '';
+    if (!files.length || !valueInput) return;
+    if (status) status.textContent = '上传中…';
+    var names = [];
+    var chain = Promise.resolve();
+    files.forEach(function (file) {
+      chain = chain.then(function () {
+        var url = '/__upload?filename=' + encodeURIComponent(file.name);
+        if (dirInput) url += '&dir=' + encodeURIComponent(dirInput.value);
+        return fetch(url, { method: 'POST', body: file }).then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+            return data.name;
+          });
+        }).then(function (name) { names.push(name); });
+      });
+    });
+    chain.then(function () {
+      if (multi) {
+        var arr = [];
+        try { arr = JSON.parse(valueInput.value || '[]'); } catch (e) { arr = []; }
+        if (!Array.isArray(arr)) arr = [];
+        names.forEach(function (name) {
+          if (arr.indexOf(name) < 0) arr.push(name);
+        });
+        valueInput.value = JSON.stringify(arr);
+      } else if (names.length) {
+        valueInput.value = names[0];
+      }
+      if (status) status.textContent = '已上传 ' + names.length + ' 个文件';
+      var form = document.getElementById('rs-devpanel');
+      if (form) form.submit();
+    }).catch(function (e) {
+      if (status) status.textContent = '上传失败：' + e.message;
+    });
+  };
   var v = null;
   setInterval(function () {
     fetch('/__ver', { cache: 'no-store' }).then(function (r) { return r.text(); }).then(function (t) {
@@ -522,6 +721,12 @@ html.rs-panel-open #rs-devpanel{transform:translateX(0)}
 #rs-devpanel input[type=text]{width:100%;box-sizing:border-box;background:#26292e;border:1px solid #3a3e44;color:#e6e6e6;
   padding:4px 8px;border-radius:5px;font:inherit}
 #rs-devpanel input[type=text]:focus{outline:none;border-color:#2563eb}
+#rs-devpanel input[type=file]{max-width:100%;color:#8b9099;font:11px/1.5 'Microsoft YaHei',system-ui,sans-serif}
+#rs-devpanel input[type=file]::file-selector-button{background:#2563eb;border:0;color:#fff;padding:4px 8px;
+  border-radius:4px;cursor:pointer;font:inherit;margin-right:6px}
+#rs-devpanel input[type=file]::file-selector-button:hover{background:#1d4ed8}
+#rs-devpanel .upl{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
+#rs-devpanel .upl-status{color:#6b7078;font-size:11px}
 #rs-devpanel .ft{padding:10px 14px;border-top:1px solid #2c2f34;display:flex;flex-direction:column;gap:8px}
 #rs-devpanel label.chk{display:flex;align-items:center;gap:8px;color:#c3c7cc;cursor:pointer}
 #rs-devpanel button.apply{background:#2563eb;border:0;color:#fff;padding:7px;border-radius:6px;cursor:pointer;font:inherit}
@@ -531,7 +736,12 @@ body{transition:padding-left .22s ease}
 html.rs-panel-open body{padding-left:300px}
 </style>"#;
 
-fn build_form(manifest: &TemplateManifest, values: &Map<String, Value>, annot: bool) -> String {
+fn build_form(
+    manifest: &TemplateManifest,
+    values: &Map<String, Value>,
+    annot: bool,
+    resources_dir: &str,
+) -> String {
     let fields: Vec<_> = manifest
         .variables
         .iter()
@@ -547,6 +757,10 @@ fn build_form(manifest: &TemplateManifest, values: &Map<String, Value>, annot: b
         "<form id=\"rs-devpanel\" method=\"get\"><div class=\"hd\">模板开发 <small>共 {} 个变量</small></div><div class=\"bd\">",
         fields.len()
     ));
+    s.push_str(&format!(
+        "<label class=\"fld\"><span>资源目录</span><input type=\"text\" name=\"resourcesDir\" value=\"{}\" placeholder=\"例如 D:\\\\项目\\\\resources\"/><div class=\"hint\" style=\"text-align:left;margin-top:2px\">图片上传会写入此目录；修改后点“应用并刷新”。</div></label>",
+        esc_attr(resources_dir)
+    ));
     for v in fields {
         let label = v.alias.clone().unwrap_or_else(|| v.key.clone());
         let val = values
@@ -556,13 +770,31 @@ fn build_form(manifest: &TemplateManifest, values: &Map<String, Value>, annot: b
                 other => other.to_string(),
             })
             .unwrap_or_default();
-        s.push_str(&format!(
-            "<label class=\"fld\"><span title=\"{}\">{}</span><input type=\"text\" name=\"{}\" value=\"{}\"/></label>",
-            esc_attr(&label),
-            esc(&label),
-            esc_attr(&v.key),
-            esc_attr(&val)
-        ));
+
+        if v.ty == "image" || v.ty == "images" {
+            let multi = if v.ty == "images" { "1" } else { "0" };
+            let multiple = if v.ty == "images" { "multiple" } else { "" };
+            s.push_str(&format!(
+                "<label class=\"fld\"><span title=\"{}\">{}</span><input type=\"text\" data-rs-input=\"{}\" name=\"{}\" value=\"{}\" placeholder=\"可填写资源路径，或使用下方上传\"/><div class=\"upl\"><input type=\"file\" accept=\"image/*\" {} data-rs-upload=\"{}\" data-multi=\"{}\" onchange=\"rsUpload(this)\"/><span class=\"upl-status\" data-rs-status=\"{}\"></span></div></label>",
+                esc_attr(&label),
+                esc(&label),
+                esc_attr(&v.key),
+                esc_attr(&v.key),
+                esc_attr(&val),
+                multiple,
+                esc_attr(&v.key),
+                multi,
+                esc_attr(&v.key)
+            ));
+        } else {
+            s.push_str(&format!(
+                "<label class=\"fld\"><span title=\"{}\">{}</span><input type=\"text\" name=\"{}\" value=\"{}\"/></label>",
+                esc_attr(&label),
+                esc(&label),
+                esc_attr(&v.key),
+                esc_attr(&val)
+            ));
+        }
     }
     s.push_str("</div><div class=\"ft\">");
     s.push_str(&format!(
@@ -585,6 +817,13 @@ fn coerce(ty: &str, s: &str) -> Value {
             .map(Value::from)
             .unwrap_or_else(|_| Value::from(s)),
         "bool" => Value::from(matches!(s, "1" | "true" | "on" | "yes")),
+        "images" | "table" | "multiselect" => {
+            if s.trim().is_empty() {
+                Value::Array(vec![])
+            } else {
+                serde_json::from_str::<Value>(s).unwrap_or_else(|_| Value::from(s))
+            }
+        }
         _ => Value::from(s),
     }
 }

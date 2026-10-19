@@ -9,6 +9,8 @@
     "core:window:allow-set-title",
     "dialog:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "opener:default",
+    "opener:allow-open-path"
   ]
 }

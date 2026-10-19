@@ -145,6 +145,14 @@ export interface RecentItem {
   template?: string;
 }
 
+export interface AppInfo {
+  os: string;
+  arch: string;
+  templatesDir: string;
+  rendersDir: string;
+  embeddedTemplatesDir: string;
+}
+
 export interface PreviewPage {
   file: string;
   html: string;

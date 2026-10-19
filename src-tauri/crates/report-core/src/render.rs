@@ -378,25 +378,40 @@ pub fn resolve_values(
 }
 
 /// A4（或指定纸张）在某方向下的宽高（mm）。
-fn page_dims(size: &str, orientation: &str) -> (String, String) {
+fn page_dims_mm(size: &str, orientation: &str) -> (f64, f64) {
     let landscape = orientation.eq_ignore_ascii_case("landscape");
     match size.to_ascii_uppercase().as_str() {
         "A3" => {
             if landscape {
-                ("420mm".into(), "297mm".into())
+                (420.0, 297.0)
             } else {
-                ("297mm".into(), "420mm".into())
+                (297.0, 420.0)
             }
         }
         _ => {
             // 默认 A4
             if landscape {
-                ("297mm".into(), "210mm".into())
+                (297.0, 210.0)
             } else {
-                ("210mm".into(), "297mm".into())
+                (210.0, 297.0)
             }
         }
     }
+}
+
+fn page_dims(size: &str, orientation: &str) -> (String, String) {
+    let (w, h) = page_dims_mm(size, orientation);
+    (format!("{w}mm"), format!("{h}mm"))
+}
+
+/// 返回页面实际宽高（mm），用于 PDF 打印任务设置纸张尺寸。
+pub fn page_size_mm(page: &PageDef) -> (f64, f64) {
+    let size = page.size.clone().unwrap_or_else(|| "A4".into());
+    let orientation = page
+        .orientation
+        .clone()
+        .unwrap_or_else(|| "portrait".into());
+    page_dims_mm(&size, &orientation)
 }
 
 /// 由页面几何生成 @page 规则与 CSS 变量。
@@ -688,6 +703,40 @@ pub fn render_print_html_with_samples(
     ))
 }
 
+/// 只渲染 manifest 中的一个 page，用于按页设置纸张尺寸后单独打印。
+/// flow page 仍由浏览器在打印时自动续页。
+pub fn render_print_page_html(
+    template_dir: &Path,
+    manifest: &TemplateManifest,
+    values: &Map<String, Value>,
+    page: &PageDef,
+    base_href: &str,
+) -> Result<String, String> {
+    let resolved = resolve_values(manifest, values)?;
+    let env = make_env(Some(template_dir.to_path_buf()), None);
+    let context = base_ctx(manifest, &resolved);
+    let assets_path = manifest.assets_path();
+
+    let tmpl = env
+        .get_template(&page.file)
+        .map_err(|e| format!("加载页面 {} 失败: {e}", page.file))?;
+    let raw = tmpl
+        .render(&context)
+        .map_err(|e| format!("渲染页面 {} 失败: {e}", page.file))?;
+
+    let (content, flow_css) = if page.is_flow() {
+        (with_flow_attr(&raw), FLOW_CSS)
+    } else {
+        (raw, "")
+    };
+
+    Ok(format!(
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n<base href=\"{base_href}\">\n<link rel=\"stylesheet\" href=\"../{assets_path}/base.css\">\n<style>\n{}{}\n</style></head><body>\n{content}\n</body></html>\n",
+        page_geometry(page, None),
+        flow_css,
+    ))
+}
+
 /// 把 image/images 变量值改写为绝对挂载 URL，供模板直接用于 `src`。
 /// 值以路由前缀区分来源：`assets/…`=模板资源、`resources/…`=工程资源；
 /// 统一改写为 `mount_root + 值`（挂载根形如 `http://report.localhost/m/<id>/`）。
@@ -753,6 +802,21 @@ mod tests {
     }
 
     #[test]
+    fn page_size_mm_respects_orientation() {
+        let portrait = PageDef {
+            size: Some("A4".into()),
+            orientation: Some("portrait".into()),
+            ..Default::default()
+        };
+        let landscape = PageDef {
+            orientation: Some("landscape".into()),
+            ..portrait.clone()
+        };
+        assert_eq!(page_size_mm(&portrait), (210.0, 297.0));
+        assert_eq!(page_size_mm(&landscape), (297.0, 210.0));
+    }
+
+    #[test]
     fn is_flow_flag() {
         assert!(!PageDef::default().is_flow());
         assert!(PageDef {
@@ -765,6 +829,27 @@ mod tests {
             ..Default::default()
         }
         .is_flow());
+    }
+
+    #[test]
+    fn print_page_uses_explicit_base_href() {
+        let dir = std::env::temp_dir().join(format!("rs-print-page-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("pages")).unwrap();
+        std::fs::write(
+            dir.join("pages/f1.html"),
+            "<div class=\"paper\"><div class=\"page\">x</div></div>",
+        )
+        .unwrap();
+
+        let m = manifest_with(None);
+        let base = "http://report.localhost/m/t/pages/";
+        let html = render_print_page_html(&dir, &m, &Map::new(), &m.pages[0], base).unwrap();
+
+        assert!(html.contains(&format!("<base href=\"{base}\">")));
+        assert!(html.contains("../assets/base.css"));
+        assert!(!html.contains("__RS_THUMB"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

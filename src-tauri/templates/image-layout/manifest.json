@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "image-layout",
+  "version": "1.0.1",
+  "contentHash": "",
+  "name": "图片排版",
+  "minAppVersion": "0.1.0",
+  "assetsPath": "assets",
+  "pagesPath": "pages",
+  "variables": [
+    {
+      "key": "layout",
+      "alias": "排列方式",
+      "type": "select",
+      "default": "four",
+      "sample": "four",
+      "options": [
+        {
+          "value": "one",
+          "label": "一页一张"
+        },
+        {
+          "value": "two",
+          "label": "一页两张"
+        },
+        {
+          "value": "four",
+          "label": "一页四张"
+        }
+      ]
+    },
+    {
+      "key": "images",
+      "alias": "图片",
+      "type": "images",
+      "required": true,
+      "accept": [
+        "png",
+        "jpg",
+        "jpeg",
+        "bmp",
+        "webp",
+        "gif"
+      ]
+    }
+  ],
+  "toc": [
+    {
+      "title": "图片排版",
+      "page": 1
+    }
+  ],
+  "pages": [
+    {
+      "file": "pages/p01.html",
+      "mode": "flow",
+      "order": 1,
+      "size": "A4",
+      "orientation": "portrait",
+      "margin": "0",
+      "mt": "10mm",
+      "mr": "10mm",
+      "mb": "10mm",
+      "ml": "10mm"
+    }
+  ]
+}

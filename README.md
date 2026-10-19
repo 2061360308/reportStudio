@@ -50,6 +50,7 @@ npm run dev:template -- src-tauri/templates/settle-audit-report
 - 默认监听 `http://127.0.0.1:1735`（端口被占用时自动挑选空闲端口）。
 - 左下角悬浮「模板变量」按钮可开合左侧变量面板（状态记忆在浏览器本地）。
 - 面板以 `manifest.sample` 为初始值，修改后点「应用并刷新」即时重渲染。
+- 面板顶部可配置「资源目录」；`image` / `images` 变量可直接选择图片上传。
 - 勾选「显示字段标记」，或在 URL 加 `?annot=1`，高亮所有字段以核对数据绑定。
 - 预览页用灰色底 + 阴影/描边勾勒每一页纸张轮廓，便于对照版面。
 - 直接编辑 `pages/*.html`、`assets/*.css` 等文件，浏览器会在约 1 秒内自动刷新。
@@ -60,6 +61,7 @@ npm run dev:template -- src-tauri/templates/settle-audit-report
 | --- | --- |
 | `--port, -p` | 监听端口，默认 `1735` |
 | `--values, -v` | 可选的 JSON 变量文件，覆盖 `sample` 值 |
+| `--resources, -r` | 可选的工程资源目录；也可在侧边栏配置 |
 | `-h, --help` | 显示帮助 |
 
 ## 模板结构（manifest）
@@ -88,9 +90,9 @@ npm run dev:template -- src-tauri/templates/settle-audit-report
 
 ```jsonc
 { "key": "license", "alias": "营业执照", "type": "image",
-  "accept": ["png", "jpg", "jpeg", "pdf"] }          // 允许的扩展名
+  "accept": ["png", "jpg", "jpeg"] }                 // 允许的扩展名
 { "key": "scans", "alias": "合同扫描件", "type": "images",
-  "accept": ["png", "jpg", "pdf"], "max": 20 }       // max 限制张数
+  "accept": ["png", "jpg"], "max": 20 }              // max 限制张数
 ```
 
 - 用户在编辑器选择文件后，文件按内容哈希（`sha256` 前 8 位 + 扩展名）写入 `resources/`，自动去重。

@@ -1,6 +1,14 @@
 <script lang="ts">
   import type { Project, VariableDef } from "./types";
   import * as api from "./api";
+  import ImageIcon from "@lucide/svelte/icons/image";
+  import Images from "@lucide/svelte/icons/images";
+  import Plus from "@lucide/svelte/icons/plus";
+  import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import { Button } from "$lib/components/elements/button";
+  import * as ButtonGroup from "$lib/components/elements/button-group";
+  import ImageGalleryDialog from "./ImageGalleryDialog.svelte";
+  import ImageLightbox from "./ImageLightbox.svelte";
 
   let {
     variable,
@@ -16,78 +24,106 @@
 
   let busy = $state(false);
   let err = $state("");
+  let fileInput = $state<HTMLInputElement | undefined>();
+  let galleryOpen = $state(false);
+  let lightboxOpen = $state(false);
+  let lightboxSrc = $state("");
+  let lightboxAlt = $state("图片");
+  let lightboxCanClear = $state(false);
 
+  const DEFAULT_EXT = ["png", "jpg", "jpeg", "bmp", "webp", "gif"];
   const multi = $derived(variable.type === "images");
   const max = $derived(variable.max ?? 0);
-  const accept = $derived(
-    variable.accept && variable.accept.length
-      ? variable.accept.map((e) => "." + e.replace(/^\./, "")).join(",")
-      : "image/*,application/pdf",
+  const allowedExts = $derived(
+    (variable.accept?.length ? variable.accept : DEFAULT_EXT)
+      .map((ext) => ext.replace(/^\./, "").toLowerCase())
+      .filter((ext) => ext !== "pdf"),
+  );
+  const accept = $derived(allowedExts.map((ext) => `.${ext}`).join(","));
+  const imageList = $derived(getList());
+  const singleValue = $derived(getSingle());
+  const hasDefault = $derived(
+    variable.default !== undefined && variable.default !== null,
+  );
+  const reachedMax = $derived(
+    multi && max > 0 && imageList.length >= max,
   );
 
-  function list(): string[] {
-    const v = project.values[variable.key];
-    return Array.isArray(v) ? (v as string[]) : [];
+  function getList(): string[] {
+    const value = project.values[variable.key];
+    return Array.isArray(value) ? (value as string[]) : [];
   }
-  function single(): string {
-    const v = project.values[variable.key];
-    return typeof v === "string" ? v : "";
+
+  function getSingle(): string {
+    const value = project.values[variable.key];
+    return typeof value === "string" ? value : "";
   }
+
   function url(name: string): string {
-    // 值自带路由前缀（assets/… 或 resources/…），统一走挂载根
     return `http://report.localhost/m/${projectId}/${name}`;
   }
-  function isPdf(name: string): boolean {
-    return name.toLowerCase().endsWith(".pdf");
-  }
 
-  const DEFAULT_EXT = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "pdf"];
   function allowed(name: string): boolean {
     const ext = name.split(".").pop()?.toLowerCase() ?? "";
-    const allow = variable.accept?.length
-      ? variable.accept.map((a) => a.replace(/^\./, "").toLowerCase())
-      : DEFAULT_EXT;
-    return allow.includes(ext);
+    return allowedExts.includes(ext);
   }
 
-  function readAsDataURL(f: File): Promise<string> {
-    return new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(String(r.result));
-      r.onerror = () => rej(r.error);
-      r.readAsDataURL(f);
+  function readAsDataURL(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
     });
   }
 
-  async function onPick(e: Event) {
-    const input = e.target as HTMLInputElement;
+  function openPicker() {
+    if (busy || reachedMax) return;
+    fileInput?.click();
+  }
+
+  async function onPick(event: Event) {
+    const input = event.target as HTMLInputElement;
     const files = Array.from(input.files ?? []);
     input.value = "";
     if (!files.length) return;
+
     busy = true;
     err = "";
     let changed = false;
+    let nextList = multi ? [...imageList] : null;
+
     try {
-      for (const f of files) {
-        if (!allowed(f.name)) {
-          err = `不支持的文件类型：${f.name}`;
+      for (const file of files) {
+        if (!allowed(file.name)) {
+          err = `不支持的文件类型：${file.name}`;
           continue;
         }
-        if (multi && max > 0 && list().length >= max) {
-          err = `最多 ${max} 个文件`;
+        if (multi && max > 0 && (nextList?.length ?? 0) >= max) {
+          err = `最多 ${max} 张图片`;
           break;
         }
-        const name = await api.addResource(projectId, f.name, await readAsDataURL(f));
-        if (multi) {
-          const next = [...list()];
-          if (!next.includes(name)) next.push(name);
-          project.values[variable.key] = next;
-          changed = true;
+
+        const name = await api.addResource(
+          projectId,
+          file.name,
+          await readAsDataURL(file),
+        );
+
+        if (multi && nextList) {
+          if (!nextList.includes(name)) {
+            nextList.push(name);
+            changed = true;
+          }
         } else {
           project.values[variable.key] = name;
           changed = true;
           break;
         }
+      }
+
+      if (multi && nextList && changed) {
+        project.values[variable.key] = nextList;
       }
     } catch (e) {
       err = String(e);
@@ -97,199 +133,288 @@
     }
   }
 
-  function remove(name: string) {
-    if (multi) {
-      project.values[variable.key] = list().filter((x) => x !== name);
-    } else {
-      // 单张清除：恢复变量默认值（模板默认图），无默认则清空
-      project.values[variable.key] =
-        typeof variable.default === "string" ? variable.default : "";
+  function removeAt(index: number) {
+    const name = imageList[index];
+    const next = imageList.filter((_, i) => i !== index);
+    project.values[variable.key] = next;
+    onchange?.();
+
+    if (!next.length) {
+      galleryOpen = false;
+      lightboxOpen = false;
+    } else if (lightboxOpen && lightboxSrc === url(name)) {
+      lightboxOpen = false;
     }
+  }
+
+  function reorder(from: number, to: number) {
+    if (from === to || from < 0 || from >= imageList.length) return;
+    const target = Math.max(0, Math.min(to, imageList.length - 1));
+    const next = [...imageList];
+    const [item] = next.splice(from, 1);
+    if (item === undefined) return;
+    next.splice(target, 0, item);
+    project.values[variable.key] = next;
     onchange?.();
   }
-  function move(i: number, d: number) {
-    const arr = [...list()];
-    const j = i + d;
-    if (j < 0 || j >= arr.length) return;
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-    project.values[variable.key] = arr;
+
+  function resetToDefault() {
+    const value = variable.default;
+    if (multi) {
+      const next = Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : typeof value === "string" && value
+          ? [value]
+          : [];
+      project.values[variable.key] = next;
+    } else {
+      project.values[variable.key] =
+        typeof value === "string" ? value : "";
+    }
+    galleryOpen = false;
+    lightboxOpen = false;
     onchange?.();
+  }
+
+  function clearSingle() {
+    project.values[variable.key] = "";
+    lightboxOpen = false;
+    onchange?.();
+  }
+
+  function openSingle() {
+    if (!singleValue) return;
+    lightboxSrc = url(singleValue);
+    lightboxAlt = variable.alias ?? "图片";
+    lightboxCanClear = true;
+    lightboxOpen = true;
+  }
+
+  function openGallery() {
+    if (!imageList.length) {
+      openPicker();
+      return;
+    }
+    galleryOpen = true;
+  }
+
+  function previewImage(name: string) {
+    lightboxSrc = url(name);
+    lightboxAlt = variable.alias ?? "图片";
+    lightboxCanClear = false;
+    lightboxOpen = true;
   }
 </script>
 
-{#if multi}
-  <div class="grid">
-    {#each list() as name, i (name)}
-      <div class="cell">
-        {#if isPdf(name)}
-          <div class="pdf">PDF</div>
-        {:else}
-          <img src={url(name)} alt="" />
-        {/if}
-        <button class="x" onclick={() => remove(name)} title="移除">×</button>
-        <div class="mv">
-          <button onclick={() => move(i, -1)} disabled={i === 0} title="上移">←</button>
-          <button
-            onclick={() => move(i, 1)}
-            disabled={i === list().length - 1}
-            title="下移">→</button
-          >
-        </div>
-      </div>
-    {/each}
-    {#if max === 0 || list().length < max}
-      <label class="add" class:busy>
-        <input type="file" {accept} multiple onchange={onPick} />
-        +
-      </label>
-    {/if}
-  </div>
-{:else if single()}
-  <div class="single">
-    {#if isPdf(single())}
-      <div class="pdf">PDF</div>
+<div class="wrap">
+  {#if multi}
+    {#if imageList.length}
+      <button
+        type="button"
+        class="stack"
+        onclick={openGallery}
+        title={`查看全部 ${imageList.length} 张图片`}
+        aria-label={`查看全部 ${imageList.length} 张图片`}
+      >
+        {#each imageList.slice(0, 3) as name (name)}
+          <span class="stack-card">
+            <img src={url(name)} alt="" />
+          </span>
+        {/each}
+        <span class="count">{imageList.length} 张</span>
+      </button>
     {:else}
-      <img src={url(single())} alt="" />
+      <button
+        type="button"
+        class="empty"
+        onclick={openPicker}
+        title="添加图片"
+        aria-label="添加图片"
+      >
+        <Images class="h-5 w-5" aria-hidden="true" />
+      </button>
     {/if}
-    <div class="ops">
-      <label class="btn">
-        <input type="file" {accept} onchange={onPick} />替换
-      </label>
-      <button class="btn" onclick={() => remove(single())}>清除</button>
-    </div>
-  </div>
-{:else}
-  <label class="btn pick">
-    <input type="file" {accept} onchange={onPick} />选择文件
-  </label>
-{/if}
+  {:else if singleValue}
+    <button
+      type="button"
+      class="single-thumb"
+      onclick={openSingle}
+      title="点击放大查看"
+      aria-label="点击放大查看"
+    >
+      <img src={url(singleValue)} alt="" />
+    </button>
+  {:else}
+    <button
+      type="button"
+      class="empty"
+      onclick={openPicker}
+      title="添加图片"
+      aria-label="添加图片"
+    >
+      <ImageIcon class="h-5 w-5" aria-hidden="true" />
+    </button>
+  {/if}
+
+  <ButtonGroup.Root class="shrink-0">
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onclick={openPicker}
+      disabled={busy || reachedMax}
+    >
+      <Plus class="h-4 w-4" aria-hidden="true" />
+      添加
+    </Button>
+    {#if hasDefault}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onclick={resetToDefault}
+        disabled={busy}
+      >
+        <RotateCcw class="h-4 w-4" aria-hidden="true" />
+        重置
+      </Button>
+    {/if}
+  </ButtonGroup.Root>
+</div>
 
 {#if busy}<span class="hint">上传中…</span>{/if}
+{#if reachedMax && max > 0}<span class="hint">最多 {max} 张</span>{/if}
 {#if err}<span class="err">{err}</span>{/if}
 
+<input
+  bind:this={fileInput}
+  type="file"
+  {accept}
+  multiple={multi}
+  onchange={onPick}
+  class="hidden"
+/>
+
+<ImageGalleryDialog
+  bind:open={galleryOpen}
+  title={variable.alias ?? "图片"}
+  images={imageList}
+  urlFor={url}
+  onclose={() => (galleryOpen = false)}
+  onremove={removeAt}
+  onreorder={reorder}
+  onpreview={previewImage}
+/>
+
+<ImageLightbox
+  bind:open={lightboxOpen}
+  src={lightboxSrc}
+  alt={lightboxAlt}
+  onclear={lightboxCanClear ? clearSingle : undefined}
+/>
+
 <style>
-  .grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .cell {
-    position: relative;
-    width: 96px;
-    height: 96px;
-    border-radius: 6px;
-    overflow: hidden;
-    background: #f3f4f6;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
-  }
-  .cell img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-  .pdf,
-  .single .pdf {
+  .wrap {
     display: flex;
     align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    font-size: 12px;
-    color: var(--muted);
-    letter-spacing: 1px;
-  }
-  .x {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    line-height: 1;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.55);
-    color: #fff;
-    font-size: 13px;
-  }
-  .mv {
-    position: absolute;
-    bottom: 2px;
-    left: 2px;
-    display: flex;
-    gap: 2px;
-  }
-  .mv button {
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    line-height: 1;
-    border-radius: 4px;
-    background: rgba(0, 0, 0, 0.45);
-    color: #fff;
-    font-size: 11px;
-  }
-  .add {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 96px;
-    height: 96px;
-    border-radius: 6px;
-    border: 1px dashed var(--placeholder, #b1b4bb);
-    color: var(--muted);
-    font-size: 24px;
-    cursor: pointer;
-  }
-  .add input,
-  .btn input {
-    display: none;
-  }
-  .single {
-    display: flex;
-    align-items: flex-start;
     gap: 12px;
+    min-width: 0;
   }
-  .single img {
-    width: 120px;
-    height: 120px;
+  .single-thumb,
+  .empty {
+    flex: none;
+    width: 64px;
+    height: 64px;
+    padding: 0;
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: var(--radius, 8px);
+    background: var(--surface-50, #fafafa);
+    box-shadow: none;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .single-thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
     object-fit: cover;
-    border-radius: 6px;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
   }
-  .single .pdf {
-    width: 120px;
-    height: 120px;
-    border-radius: 6px;
-    background: #f3f4f6;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+  .single-thumb:hover {
+    box-shadow: 0 0 0 2px var(--focus, #0072f5);
   }
-  .ops {
+  .empty {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .btn {
-    display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 5px 12px;
-    font-size: 12px;
+    border-style: dashed;
+    color: var(--placeholder, #808080);
+  }
+  .empty:hover {
+    background: var(--surface-100, #f2f2f2);
+  }
+  .stack {
+    position: relative;
+    flex: none;
+    width: 72px;
+    height: 64px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
     cursor: pointer;
+  }
+  .stack:hover {
+    background: transparent;
+  }
+  .stack-card {
+    position: absolute;
+    left: 4px;
+    top: 6px;
+    width: 52px;
+    height: 52px;
+    overflow: hidden;
     border-radius: 6px;
-    background: var(--surface-50, #f4f4f5);
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+    background: var(--surface-50, #fafafa);
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.14),
+      0 2px 4px rgba(0, 0, 0, 0.12);
   }
-  .btn:hover {
-    background: var(--surface-100, #ececee);
+  .stack-card img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
-  .pick {
-    width: fit-content;
+  .stack-card:nth-child(1) {
+    z-index: 3;
+    transform: rotate(-4deg);
+  }
+  .stack-card:nth-child(2) {
+    z-index: 2;
+    transform: translate(6px, 2px) rotate(2deg);
+  }
+  .stack-card:nth-child(3) {
+    z-index: 1;
+    transform: translate(12px, 4px) rotate(7deg);
+  }
+  .count {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 4;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    background: var(--text, #171717);
+    color: #fff;
+    font-size: 10px;
+    line-height: 1.6;
+    white-space: nowrap;
   }
   .hint {
     margin-left: 8px;
     font-size: 12px;
-    color: var(--muted);
+    color: var(--muted, #666);
   }
   .err {
     display: block;
