@@ -1,16 +1,16 @@
 name: pages
 
+# 只在 Release 成功后部署，避免构建期间提前发布旧 latest.json。
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - 'scripts/prepare-pages-downloads.mjs'
-      - '.github/workflows/pages.yml'
   workflow_run:
     workflows: [release]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '指定 Release tag（留空使用 latest），例如 release-8-1'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,6 +25,8 @@ jobs:
   deploy:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_run' && format('release-{0}-{1}', github.event.workflow_run.run_number, github.event.workflow_run.run_attempt) || github.event.inputs.release_tag || '' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -42,17 +44,51 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p .release
-          if gh release view --json tagName >/dev/null 2>&1; then
-            for i in $(seq 1 10); do
-              if gh release download --pattern latest.json --dir .release --clobber; then
-                break
-              fi
-              sleep 3
-            done
-            test -f .release/latest.json || { echo "latest.json 下载失败"; exit 1; }
-          else
-            echo "暂无 Release，封面下载按钮将回退到 Releases"
+          tag="$RELEASE_TAG"
+
+          if [ -n "$tag" ] && ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag 不存在（可能本轮无版本变化），回退到 latest"
+            tag=""
           fi
+
+          if [ -z "$tag" ] && ! gh release view --json tagName >/dev/null 2>&1; then
+            echo "暂无 Release，封面下载按钮将回退到 Releases"
+            exit 0
+          fi
+
+          ok=0
+          for i in $(seq 1 10); do
+            rm -f .release/latest.json
+            if [ -n "$tag" ]; then
+              gh release download "$tag" --pattern latest.json --dir .release --clobber || true
+            else
+              gh release download --pattern latest.json --dir .release --clobber || true
+            fi
+
+            valid=0
+            if [ -f .release/latest.json ]; then
+              if [ -z "$tag" ]; then
+                valid=1
+              elif [ "$(jq -r '.release // empty' .release/latest.json)" = "$tag" ]; then
+                valid=1
+              fi
+            fi
+
+            if [ "$valid" = "1" ]; then
+              ok=1
+              break
+            fi
+            echo "latest.json 尚未就绪，重试 $i/10"
+            sleep 3
+          done
+
+          if [ "$ok" != "1" ]; then
+            echo "latest.json 下载或版本校验失败"
+            exit 1
+          fi
+
+          echo "resolved_release=$tag" >> "$GITHUB_ENV"
+          jq -r '"latest.json: v" + (.version // "") + " (" + (.release // "") + ")"' .release/latest.json
 
       - name: 下载最新应用与模板
         id: prepare_downloads
@@ -67,11 +103,18 @@ jobs:
           esac
           PAGES_BASE_URL="${PAGES_BASE_URL%/}/"
           echo "pages_base_url=$PAGES_BASE_URL" >> "$GITHUB_OUTPUT"
+
+          EXPECTED_ARGS=()
+          if [ -n "${resolved_release:-}" ]; then
+            EXPECTED_ARGS=(--expected-release "$resolved_release")
+          fi
+
           node scripts/prepare-pages-downloads.mjs \
             --latest .release/latest.json \
             --docs docs \
             --repo "${{ github.repository }}" \
-            --base-url "$PAGES_BASE_URL"
+            --base-url "$PAGES_BASE_URL" \
+            "${EXPECTED_ARGS[@]}"
 
       - uses: actions/configure-pages@v5
         with:

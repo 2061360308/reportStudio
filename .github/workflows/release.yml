@@ -160,6 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # pages.yml 依赖此格式定位本轮 Release，修改时需同步。
       RELEASE_TAG: release-${{ github.run_number }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4

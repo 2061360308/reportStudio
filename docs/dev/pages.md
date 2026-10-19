@@ -107,9 +107,12 @@ Windows ARM64 浏览器无法通过 User-Agent 可靠区分时，`navigator.user
 
 触发条件：
 
-- 推送 `main`，且改动涉及 `docs/**`、下载准备脚本或工作流本身
-- `release` 工作流完成
-- 手动 `workflow_dispatch`
+- `release` 工作流成功完成
+- 手动 `workflow_dispatch`（可填写 `release_tag` 指定补发版本）
+
+Pages 不再由 `push` 直接触发，避免 Release 还在构建时先部署旧版 `latest.json`。文档改动
+同样会等 `release` 工作流结束；没有版本变化时 `release` 的 plan 阶段很快结束，Pages
+随后部署。
 
 ### 为什么用 `workflow_run`
 
@@ -125,18 +128,32 @@ on:
 
 并只在该 Release 工作流成功时继续部署。
 
+Release 完成后，Pages 会根据触发本次运行的 Release 计算出精确 tag：
+
+```
+release-<run_number>-<run_attempt>
+```
+
+然后下载该 tag 下的 `latest.json`，而不是依赖 GitHub 的 latest 指针。这样即使刚执行完
+`gh release edit --latest`、latest 指针仍有传播延迟，也不会拿到上一版清单。目标 tag
+不存在时（例如本轮没有版本变化）才回退到 latest。
+
 ### 主要步骤
 
 1. 签出默认分支
-2. 下载最新 Release 的 `latest.json`
-3. 运行 `scripts/prepare-pages-downloads.mjs`，下载 x64 / ARM64 安装包与全部最新模板
-4. 生成改写为 Pages 地址的 `latest.json`
-5. 上传 `docs/` 为 Pages artifact
-6. 部署到 GitHub Pages
-7. 调用 `2061360308/edgeone-purge-action@v1` 刷新 EdgeOne 目录缓存
+2. 计算目标 Release tag，并下载该 tag 的 `latest.json`
+3. 校验 `latest.json` 的 `release` 字段与目标 tag 一致
+4. 运行 `scripts/prepare-pages-downloads.mjs`，下载 x64 / ARM64 安装包与全部最新模板
+5. 生成改写为 Pages 地址的 `latest.json`
+6. 上传 `docs/` 为 Pages artifact
+7. 部署到 GitHub Pages
+8. 调用 `2061360308/edgeone-purge-action@v1` 刷新 EdgeOne 目录缓存
 
 下载步骤使用 `GITHUB_TOKEN` 访问 Release 资产，避免匿名请求限流。如果仓库还没有任何
 Release，工作流只部署 Docsify 文档，封面按钮回退到 Releases。
+
+需要补发或修复某一版时，可手动运行 `pages` 工作流并填写 `release_tag`，例如
+`release-8-1`。工作流会校验该 tag 的 `latest.json` 后再部署。
 
 EdgeOne 刷新使用 `purge_prefix`，目标为当前 Pages 根地址（`PAGES_BASE_URL`），默认
 `https://oilu.cn/reportStudio/`，默认 `method: invalidate`。
@@ -152,7 +169,8 @@ node scripts/prepare-pages-downloads.mjs \
   --latest .release/latest.json \
   --docs docs \
   --repo <owner>/<repo> \
-  --base-url https://<owner>.github.io/<repo>/
+  --base-url https://<owner>.github.io/<repo>/ \
+  --expected-release release-8-1
 ```
 
 参数：
@@ -163,9 +181,11 @@ node scripts/prepare-pages-downloads.mjs \
 | `--docs` | 文档目录，默认 `docs` |
 | `--repo` | GitHub 仓库，用于生成 Releases 链接；默认读 `GITHUB_REPOSITORY` |
 | `--base-url` | Pages 站点根地址；默认 `https://oilu.cn/reportStudio/` |
+| `--expected-release` | 期望的 Release tag；`latest.json` 的 `release` 不匹配时直接失败 |
 
 行为：
 
+- 传入 `--expected-release` 时校验 `latest.json` 的 `release` 字段
 - 清空并重建 `docs/downloads/`
 - 遍历 `latest.json` 的 `platforms`，按 URL 去重后下载安装包
 - 同时保留 `windows-x86_64-nsis` 与 `windows-aarch64-nsis` 两个 CPU 版本
@@ -318,8 +338,10 @@ EdgeOne 缓存刷新需要在 **Settings → Secrets and variables → Actions**
 
 - 检查 `release` 工作流是否成功
 - 检查 `pages` 工作流的 `workflow_run` 是否被触发
+- 检查 `pages` 日志中输出的 `latest.json: v... (release-...)` 是否为本轮 tag
 - 检查 Pages Source 是否为 GitHub Actions
 - 检查工作流权限是否包含 `pages: write` 和 `id-token: write`
+- 需要补发时，手动运行 `pages` 并填写对应的 `release_tag`
 
 **模板下载 404**
 

@@ -287,22 +287,24 @@ release
 
 ## 6.1 文档站与下载按钮
 
-每次 Release 发布完成后，`.github/workflows/pages.yml` 会自动：
+Pages 只在 Release 工作流成功完成后部署，不再由 `push` 提前触发。每次 Release 发布完成
+后，`.github/workflows/pages.yml` 会自动：
 
-1. 拉取最新 `latest.json`
-2. 下载 Windows x64 / ARM64 两个应用安装包和全部最新模板
-3. 校验模板 sha256
-4. 生成 `docs/downloads/index.json`
-5. 生成改写为 Pages 地址的 `docs/downloads/latest.json`
-6. 部署到 GitHub Pages
-7. 调用 EdgeOne Purge Action 刷新 Pages 根目录缓存
+1. 根据触发本次运行的 Release 计算精确 tag（`release-<run_number>-<run_attempt>`）
+2. 拉取该 tag 下的 `latest.json`，并校验 `release` 字段
+3. 下载 Windows x64 / ARM64 两个应用安装包和全部最新模板
+4. 校验模板 sha256
+5. 生成 `docs/downloads/index.json`
+6. 生成改写为 Pages 地址的 `docs/downloads/latest.json`
+7. 部署到 GitHub Pages
+8. 调用 EdgeOne Purge Action 刷新 Pages 根目录缓存
 
 `latest.json` 中的 `platforms[*].url` 和 `templates[*].url` 会改写为 Pages 上的文件地址，
 `signature`、`sha256`、`size` 保持不变。应用自动更新和模板同步都会优先读取 Pages 清单，
 失败时回退到 GitHub Release 清单。
 
-注意：如果 Pages 返回 HTTP 200 但清单仍是旧版本，更新器会按“无更新”处理，不会继续
-尝试 GitHub；正常情况下 `pages` 工作流会在 Release 成功后立即重新部署。
+如果目标 Release tag 不存在（例如本轮没有版本变化），工作流会回退到 latest。需要补发或
+修复某一版时，可手动运行 `pages` 工作流并填写 `release_tag`，例如 `release-8-1`。
 
 文档站使用本地 vendoring 的 Docsify + Vue 主题（不使用 CDN）。封面上的下载按钮会读取
 `downloads/index.json`，自动识别当前系统与架构；下拉菜单固定提供 Windows x64 / Windows

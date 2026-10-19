@@ -8,6 +8,9 @@ const DEFAULT_PAGES_BASE_URL = "https://oilu.cn/reportStudio/";
 const args = parseArgs(process.argv.slice(2));
 const docsDir = path.resolve(args.docs ?? path.join(ROOT, "docs"));
 const latestPath = args.latest ? path.resolve(args.latest) : null;
+const expectedRelease = args["expected-release"]
+  ? String(args["expected-release"]).trim()
+  : "";
 const repo = args.repo ?? process.env.GITHUB_REPOSITORY ?? "2061360308/reportStudio";
 const downloadsDir = path.join(docsDir, "downloads");
 const indexJsonPath = path.join(downloadsDir, "index.json");
@@ -111,6 +114,11 @@ async function main() {
   const latest = JSON.parse(
     fs.readFileSync(latestPath, "utf8").replace(/^\uFEFF/, ""),
   );
+  if (expectedRelease && String(latest.release ?? "") !== expectedRelease) {
+    throw new Error(
+      `latest.json 的 release 为 ${latest.release ?? "空"}，期望 ${expectedRelease}`,
+    );
+  }
   const version = String(latest.version ?? "0.0.0");
   const platforms = latest.platforms ?? {};
   const platformEntries = [];
