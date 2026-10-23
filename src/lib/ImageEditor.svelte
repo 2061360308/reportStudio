@@ -24,6 +24,7 @@
 
   let busy = $state(false);
   let err = $state("");
+  let dragActive = $state(false);
   let fileInput = $state<HTMLInputElement | undefined>();
   let galleryOpen = $state(false);
   let lightboxOpen = $state(false);
@@ -87,6 +88,15 @@
     const files = Array.from(input.files ?? []);
     input.value = "";
     if (!files.length) return;
+    await uploadFiles(files);
+  }
+
+  async function uploadFiles(files: File[]) {
+    if (busy || !files.length) return;
+    if (reachedMax) {
+      err = max > 0 ? `最多 ${max} 张图片` : err;
+      return;
+    }
 
     busy = true;
     err = "";
@@ -131,6 +141,43 @@
       busy = false;
       if (changed) onchange?.();
     }
+  }
+
+  function hasFileDrag(event: DragEvent): boolean {
+    return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  }
+
+  function onDragEnter(event: DragEvent) {
+    if (!hasFileDrag(event)) return;
+    event.preventDefault();
+    dragActive = true;
+  }
+
+  function onDragOver(event: DragEvent) {
+    if (!hasFileDrag(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = busy || reachedMax ? "none" : "copy";
+    }
+  }
+
+  function onDragLeave(event: DragEvent) {
+    const target = event.currentTarget as HTMLElement;
+    const related = event.relatedTarget;
+    if (related instanceof Node && target.contains(related)) return;
+    dragActive = false;
+  }
+
+  function onDrop(event: DragEvent) {
+    if (!hasFileDrag(event)) return;
+    event.preventDefault();
+    dragActive = false;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length) void uploadFiles(files);
+  }
+
+  function preventWindowDrop(event: DragEvent) {
+    if (hasFileDrag(event)) event.preventDefault();
   }
 
   function removeAt(index: number) {
@@ -206,7 +253,18 @@
   }
 </script>
 
-<div class="wrap">
+<svelte:window ondragover={preventWindowDrop} ondrop={preventWindowDrop} />
+
+<div
+  class="wrap"
+  class:drag-active={dragActive}
+  role="group"
+  aria-label={variable.alias ?? "图片"}
+  ondragenter={onDragEnter}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+>
   {#if multi}
     {#if imageList.length}
       <button
@@ -228,7 +286,7 @@
         type="button"
         class="empty"
         onclick={openPicker}
-        title="添加图片"
+        title="添加图片（可拖拽文件）"
         aria-label="添加图片"
       >
         <Images class="h-5 w-5" aria-hidden="true" />
@@ -249,7 +307,7 @@
       type="button"
       class="empty"
       onclick={openPicker}
-      title="添加图片"
+      title="添加图片（可拖拽文件）"
       aria-label="添加图片"
     >
       <ImageIcon class="h-5 w-5" aria-hidden="true" />
@@ -282,6 +340,7 @@
   </ButtonGroup.Root>
 </div>
 
+{#if dragActive}<span class="hint">松开以添加图片</span>{/if}
 {#if busy}<span class="hint">上传中…</span>{/if}
 {#if reachedMax && max > 0}<span class="hint">最多 {max} 张</span>{/if}
 {#if err}<span class="err">{err}</span>{/if}
@@ -315,10 +374,22 @@
 
 <style>
   .wrap {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 12px;
     min-width: 0;
+    border-radius: 10px;
+    outline: 2px dashed transparent;
+    outline-offset: 4px;
+    transition: outline-color 0.12s ease;
+  }
+  .wrap.drag-active {
+    outline-color: var(--focus, #0072f5);
+  }
+  .wrap.drag-active .empty {
+    background: color-mix(in srgb, var(--focus, #0072f5) 12%, transparent);
+    color: var(--focus, #0072f5);
   }
   .single-thumb,
   .empty {
