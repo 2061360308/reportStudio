@@ -581,10 +581,14 @@ const PREVIEW_JS: &str = r#"(function () {
       for (var i = 0; i < hs.length; i++) hs[i].classList.remove("rs-hit");
     }
   });
-  function isFlow() { return !!document.querySelector("[data-flow]"); }
+  function flowRoot() {
+    return document.querySelector("[data-flow] .page") || document.querySelector("[data-flow]");
+  }
   function reportSize() {
-    if (!isFlow()) return;
-    var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, document.body.offsetHeight);
+    var root = flowRoot();
+    if (!root) return;
+    var h = Math.ceil(root.getBoundingClientRect().height);
+    if (!h) return;
     if (parent !== window) parent.postMessage({ type: "rs-flow-size", page: PAGE, height: h }, "*");
   }
   function settle() { collect(); reportSize(); }
@@ -592,7 +596,10 @@ const PREVIEW_JS: &str = r#"(function () {
   else settle();
   window.addEventListener("load", settle);
   if (document.fonts && document.fonts.ready) { try { document.fonts.ready.then(settle); } catch (e) {} }
-  try { new ResizeObserver(function () { reportSize(); }).observe(document.body); } catch (e) {}
+  try {
+    var observed = flowRoot() || document.body;
+    new ResizeObserver(function () { reportSize(); }).observe(observed);
+  } catch (e) {}
 })();"#;
 
 /// 逐页渲染成完整文档字符串（不落盘、不拷贝模板）：返回 (file, html, thumb_html)。
@@ -952,6 +959,8 @@ mod tests {
         assert!(html.contains("repeating-linear-gradient"));
         assert!(html.contains(&format!("<base href=\"{base}\">")));
         assert!(html.contains("rs-flow-size"));
+        assert!(html.contains("flowRoot"));
+        assert!(html.contains("getBoundingClientRect().height"));
         assert!(thumb.contains("window.__RS_THUMB=1"));
         assert!(!html.contains("window.__RS_THUMB=1"));
 

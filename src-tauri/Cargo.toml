@@ -1,6 +1,6 @@
 [package]
 name = "report-studio"
-version = "0.2.2"
+version = "0.2.3"
 description = "工程报告生成工具"
 authors = ["you"]
 edition = "2021"

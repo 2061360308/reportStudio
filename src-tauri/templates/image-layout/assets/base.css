@@ -76,6 +76,43 @@ body {
   object-fit: fill;
 }
 
+.smart-sheet {
+  display: block;
+}
+
+.smart-canvas {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.smart-row {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.smart-cell {
+  flex: none;
+  margin: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.smart-cell img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+
 .empty {
   display: flex;
   align-items: center;

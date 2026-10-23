@@ -1038,7 +1038,7 @@ fn build_form(
     let fields: Vec<_> = manifest
         .variables
         .iter()
-        .filter(|v| v.ty != "computed")
+        .filter(|v| v.ty != "computed" && manifest.variable_visible(v, values))
         .collect();
 
     let mut s = String::new();

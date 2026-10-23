@@ -25,6 +25,18 @@ pub struct ColumnDef {
     pub format: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisibleWhen {
+    pub key: String,
+    #[serde(default)]
+    pub equals: Option<String>,
+    #[serde(default)]
+    pub not_equals: Option<String>,
+    #[serde(default, rename = "in")]
+    pub r#in: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VariableDef {
@@ -60,6 +72,12 @@ pub struct VariableDef {
     pub group: Option<String>,
     #[serde(default)]
     pub order: Option<i64>,
+    /// 条件显示：仅当指定变量的值满足条件时在编辑器中显示。
+    #[serde(default)]
+    pub visible_when: Option<VisibleWhen>,
+    /// select：是否允许空选项（默认允许）。
+    #[serde(default)]
+    pub allow_empty: Option<bool>,
     #[serde(default)]
     pub readonly: bool,
     /// image/images：允许的扩展名（如 ["png","jpg"]）
@@ -161,6 +179,43 @@ impl TemplateManifest {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "pages".into())
     }
+
+    pub fn variable_visible(&self, variable: &VariableDef, values: &Map<String, Value>) -> bool {
+        let Some(condition) = &variable.visible_when else {
+            return true;
+        };
+        let current = values
+            .get(&condition.key)
+            .cloned()
+            .or_else(|| {
+                self.variables
+                    .iter()
+                    .find(|v| v.key == condition.key)
+                    .and_then(|v| v.default.clone())
+            })
+            .unwrap_or(Value::Null);
+        let text = match current {
+            Value::String(s) => s,
+            Value::Null => String::new(),
+            other => other.to_string(),
+        };
+        if let Some(equals) = &condition.equals {
+            if &text != equals {
+                return false;
+            }
+        }
+        if let Some(not_equals) = &condition.not_equals {
+            if &text == not_equals {
+                return false;
+            }
+        }
+        if let Some(list) = &condition.r#in {
+            if !list.iter().any(|item| item == &text) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,4 +279,50 @@ pub struct PreviewPage {
     pub margin: String,
     /// "fixed" | "flow"
     pub mode: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest() -> TemplateManifest {
+        serde_json::from_str(
+            r#"{
+                "schemaVersion": 1,
+                "id": "t",
+                "version": "1",
+                "name": "t",
+                "variables": [
+                    { "key": "layout", "type": "select", "default": "smart" },
+                    {
+                        "key": "smart_max",
+                        "type": "select",
+                        "default": "6",
+                        "visibleWhen": { "key": "layout", "equals": "smart" }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn visible_when_uses_value_then_default() {
+        let manifest = manifest();
+        let variable = &manifest.variables[1];
+        assert!(manifest.variable_visible(variable, &Map::new()));
+
+        let mut values = Map::new();
+        values.insert("layout".into(), Value::String("four".into()));
+        assert!(!manifest.variable_visible(variable, &values));
+
+        values.insert("layout".into(), Value::String("smart".into()));
+        assert!(manifest.variable_visible(variable, &values));
+    }
+
+    #[test]
+    fn visible_when_without_condition_is_visible() {
+        let manifest = manifest();
+        assert!(manifest.variable_visible(&manifest.variables[0], &Map::new()));
+    }
 }

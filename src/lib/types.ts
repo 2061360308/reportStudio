@@ -47,6 +47,13 @@ export interface VariableDef {
   help?: string;
   group?: string;
   order?: number;
+  visibleWhen?: {
+    key: string;
+    equals?: string;
+    notEquals?: string;
+    in?: string[];
+  };
+  allowEmpty?: boolean;
   readonly?: boolean;
   /** image/images：允许的扩展名（如 ["png","jpg"]） */
   accept?: string[];

@@ -28,6 +28,7 @@
   } from "$lib/updater";
   import { findTemplateUpdates, syncAllTemplates } from "$lib/templateSync";
   import { TemplateValidation } from "$lib/templateHooks";
+  import { isVariableVisible } from "$lib/visibility";
   import type {
     OpenedProject,
     RecentItem,
@@ -499,7 +500,11 @@
   function requiredIssues(o: OpenedProject): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
     for (const v of o.manifest.variables) {
-      if (v.required && v.type !== "computed") {
+      if (
+        v.required &&
+        v.type !== "computed" &&
+        isVariableVisible(v, o.project.values, o.manifest.variables)
+      ) {
         const val = o.project.values[v.key];
         if (val === undefined || val === null || val === "") {
           issues.push({

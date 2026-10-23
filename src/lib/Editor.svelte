@@ -14,6 +14,7 @@
   import TableEditor from "./TableEditor.svelte";
   import ImageEditor from "./ImageEditor.svelte";
   import * as api from "./api";
+  import { isVariableVisible } from "./visibility";
 
   let {
     manifest,
@@ -161,6 +162,11 @@
   });
 
   const allIssues = $derived([...localIssueList, ...issues]);
+  const visibleVariables = $derived(
+    manifest.variables.filter((v) =>
+      isVariableVisible(v, project.values, manifest.variables),
+    ),
+  );
 
   const fieldIssues = $derived.by(() => {
     const map = new Map<string, ValidationIssue[]>();
@@ -461,7 +467,7 @@
     </div>
   {/if}
 
-  {#each manifest.variables as v (v.key)}
+  {#each visibleVariables as v (v.key)}
     <div
       class="field"
       class:wide={v.type === "text" ||
@@ -539,7 +545,9 @@
           value={String(get(v.key) ?? "")}
           onchange={(e) => set(v.key, (e.target as HTMLSelectElement).value)}
         >
-          <option value="">--</option>
+          {#if v.allowEmpty !== false}
+            <option value="">--</option>
+          {/if}
           {#each v.options ?? [] as o (o.value)}
             <option value={o.value}>{o.label}</option>
           {/each}
